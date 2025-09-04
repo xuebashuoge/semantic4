@@ -648,35 +648,8 @@ def compute_empirical_risk(outputs, targets, pmin, bounded=True):
         empirical_risk = (1./(np.log(1./pmin))) * empirical_risk
     return empirical_risk
 
-def test_exp():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"CUDA: {torch.cuda.is_available()}")
-    device = torch.device("mps" if torch.backends.mps.is_available() else device)
-    print("MPS: ", torch.backends.mps.is_available())
-    print(f"Using device: {device}")
-
-    name_data = 'cifar10'
-    sigma_prior = 0.03
-    dropout_prob = 0.2
-    batch_size = 250
-    perc_train = 1.0
-    perc_prior = 0.5
-    prior_dist = 'gaussian'
-    l_0 = 2
-    channel_type = 'bec'
-    outage = 0.0
-    mc_samples = 100
-    clamping = True
-    pmin = 1e-5
-
-    # this makes the initialised prior the same for all bounds
-    torch.manual_seed(7)
-    np.random.seed(0)
-    if device == 'cuda':
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-    elif device == 'mps':
-        torch.use_deterministic_algorithms(True)
+def test_exp(name_data='cifar10', sigma_prior=0.03, dropout_prob=0.2, batch_size=250, perc_train=1.0, perc_prior=0.5, prior_dist='gaussian', l_0=2, channel_type='bec', outage=0.1, mc_samples=100, clamping=True, pmin=1e-5, device='cuda'):
+    
 
     loader_kargs = {'num_workers': 1,
                     'pin_memory': True} if torch.cuda.is_available() else {}
@@ -717,8 +690,19 @@ def test_exp():
     cross_entropy_empirical = 0.0
     total_empirical = 0.0
 
+    correct_empirical_net0 = 0.0
+    cross_entropy_empirical_net0 = 0.0
+    total_empirical_net0 = 0.0
+
     for data_batch, target_batch in tqdm(val_bound):
         data_batch, target_batch = data_batch.to(device), target_batch.to(device)
+
+        outputs_net0 = net0(data_batch)
+        loss_net0 = compute_empirical_risk(outputs_net0, target_batch, pmin, clamping)
+        pred_net0 = outputs_net0.max(1, keepdim=True)[1]
+        correct_empirical_net0 += pred_net0.eq(target_batch.view_as(pred_net0)).sum().item()
+        total_empirical_net0 += target_batch.size(0)
+        cross_entropy_empirical_net0 += loss_net0.item()
         
         for _ in range(mc_samples):
             outputs = net(data_batch, sample=True, wireless=False, clamping=clamping, pmin=pmin)
@@ -730,15 +714,28 @@ def test_exp():
 
     cross_entropy_empirical /= (len(val_bound) * mc_samples)
     error_empirical = 1.0 - (correct_empirical / total_empirical)
+    cross_entropy_empirical_net0 /= len(val_bound)
+    error_empirical_net0 = 1.0 - (correct_empirical_net0 / total_empirical_net0)
 
     # compute population risk
     correct_population = 0.0
     cross_entropy_population = 0.0
     total_population = 0.0
 
+    correct_population_net0 = 0.0
+    cross_entropy_population_net0 = 0.0
+    total_population_net0 = 0.0
+
     with torch.no_grad():
         for data, target in tqdm(test_loader):
             data, target = data.to(device), target.to(device)
+
+            outputs_net0 = net0(data)
+            loss_net0 = compute_empirical_risk(outputs_net0, target, pmin, clamping)
+            pred_net0 = outputs_net0.max(1, keepdim=True)[1]
+            correct_population_net0 += pred_net0.eq(target.view_as(pred_net0)).sum().item()
+            total_population_net0 += target.size(0)
+            cross_entropy_population_net0 += loss_net0.item()
 
             for _ in range(mc_samples):
 
@@ -752,6 +749,10 @@ def test_exp():
 
     cross_entropy_population /= (len(test_loader) * mc_samples)
     error_population = 1.0 - (correct_population / total_population)
+    cross_entropy_population_net0 /= len(test_loader)
+    error_population_net0 = 1.0 - (correct_population_net0 / total_population_net0)
 
+    print(f"***Final results***")
+    print(f"Dataset: {name_data}, Sigma: {sigma_prior :.5f}, pmin: {pmin :.5f}, Dropout: {dropout_prob :.5f}, Perc_train: {perc_train :.5f}, Perc_prior: {perc_prior :.5f}, L_0: {l_0}, Channel: {channel_type}, Outage: {outage :.5f}, MC samples: {mc_samples}, Clamping: {clamping}, Prior empirical error: {error_empirical_net0 :.5f}, Prior empirical CE loss: {cross_entropy_empirical_net0 :.5f}, Prior population error: {error_population_net0 :.5f}, Prior population CE loss: {cross_entropy_population_net0 :.5f}, Empirical error: {error_empirical :.5f}, Empirical CE loss: {cross_entropy_empirical :.5f}, Population error: {error_population :.5f}, Population CE loss: {cross_entropy_population :.5f}, KL: {kl :.5f}")
 
     print('Done!')
