@@ -489,8 +489,7 @@ class ProbConv2d(nn.Module):
             bias_mu_init = torch.zeros(out_channels)
 
         # set scale parameters
-        weights_rho_init = torch.ones(
-            out_channels, in_channels, *self.kernel_size) * rho_prior
+        weights_rho_init = torch.ones(out_channels, in_channels, *self.kernel_size) * rho_prior
         bias_rho_init = torch.ones(out_channels) * rho_prior
 
         if init_prior == 'zeros':
@@ -1296,8 +1295,8 @@ def trainNNet(net, optimizer, epoch, train_loader, device='cuda', verbose=False)
     """
     # train and report training metrics
     net.train()
-    total, correct, avgloss = 0.0, 0.0, 0.0
-    for batch_id, (data, target) in enumerate(tqdm(train_loader)):
+    correct, loss_sum = 0.0, 0.0
+    for data, target in tqdm(train_loader):
         data, target = data.to(device), target.to(device)
         net.zero_grad()
         output = net(data)
@@ -1306,14 +1305,12 @@ def trainNNet(net, optimizer, epoch, train_loader, device='cuda', verbose=False)
         optimizer.step()
         pred = output.max(1, keepdim=True)[1]
         correct += pred.eq(target.view_as(pred)).sum().item()
-        total += target.size(0)
-        avgloss = avgloss + loss.detach().item()
+        loss_sum = loss_sum + loss.detach().item()
     # show the average loss and KL during the epoch
     if verbose:
-        print(
-            f"-Epoch {epoch :.5f}, Train loss: {avgloss/batch_id :.5f}, Train err:  {1-(correct/total):.5f}")
-    
-    return avgloss/batch_id, 1-(correct/total)
+        print(f"-Epoch {epoch :.5f}, Train loss: {loss_sum/len(train_loader) :.5f}, Train err: {1-(correct/(len(train_loader)*train_loader.batch_size)):.5f}")
+
+    return loss_sum/len(train_loader), 1-(correct/(len(train_loader)*train_loader.batch_size))
 
 
 def testNNet(net, test_loader, device='cuda', verbose=True):
@@ -1335,7 +1332,7 @@ def testNNet(net, test_loader, device='cuda', verbose=True):
 
     """
     net.eval()
-    correct, total = 0, 0.0
+    loss_sum, correct = 0.0, 0.0
     with torch.no_grad():
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
@@ -1343,10 +1340,10 @@ def testNNet(net, test_loader, device='cuda', verbose=True):
             loss = F.nll_loss(outputs, target)
             pred = outputs.max(1, keepdim=True)[1]
             correct += pred.eq(target.view_as(pred)).sum().item()
-            total += target.size(0)
-    print(
-        f"-Prior: Test loss: {loss :.5f}, Test err:  {1-(correct/total):.5f}")
-    return 1-(correct/total)
+            loss_sum = loss_sum + loss.detach().item()
+    print(f"-Prior: Test loss: {loss_sum/len(test_loader):.5f}, Test err: {1-(correct/(len(test_loader)*test_loader.batch_size)):.5f}")
+    
+    return loss_sum/len(test_loader), 1-(correct/(len(test_loader)*test_loader.batch_size))
 
 
 def trainPNNet(net, optimizer, pbobj, epoch, train_loader, lambda_var=None, optimizer_lambda=None, verbose=False):

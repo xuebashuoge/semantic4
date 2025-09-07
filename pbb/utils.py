@@ -648,27 +648,58 @@ def compute_empirical_risk(outputs, targets, pmin, bounded=True):
         empirical_risk = (1./(np.log(1./pmin))) * empirical_risk
     return empirical_risk
 
-def test_exp(name_data='cifar10', sigma_prior=0.03, dropout_prob=0.2, batch_size=250, perc_train=1.0, perc_prior=0.5, prior_dist='gaussian', l_0=2, channel_type='bec', outage=0.1, mc_samples=100, clamping=True, pmin=1e-5, device='cuda'):
-    
+def test_exp(model='cnn', name_data='cifar10', sigma_prior=0.03, learning_rate_prior=0.01, momentum_prior=0.95, prior_epochs=70, dropout_prob=0.2, batch_size=250, perc_train=1.0, perc_prior=0.5, prior_dist='gaussian', l_0=2, channel_type='bec', outage=0.1, mc_samples=100, clamping=True, pmin=1e-5, device='cuda'):
 
-    loader_kargs = {'num_workers': 1,
-                    'pin_memory': True} if torch.cuda.is_available() else {}
+
+    loader_kargs = {'num_workers': 1, 'pin_memory': True} if torch.cuda.is_available() else {}
 
     train, test = loaddataset(name_data)
     rho_prior = math.log(math.exp(sigma_prior)-1.0)
 
-    net0 = CNNet9l(dropout_prob=dropout_prob).to(device)
-
-    prior_file = 'results/fclassic_cifar10_cnn_sig0.03_pmin1e-05_lr0.001_mom0.95_kl1_drop0.2/prior/prior_net.pth'
-
-    if os.path.exists(prior_file):
-        net0.load_state_dict(torch.load(prior_file, map_location=device))
-        print("Loaded prior")
-    else:
-        raise RuntimeError(f'Prior file {prior_file} not found')
     
     train_loader, test_loader, valid_loader, val_bound_one_batch, _, val_bound = loadbatches(train, test, loader_kargs, batch_size, prior=True, perc_train=perc_train, perc_prior=perc_prior)
+
+    folder = f'results/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_lr{learning_rate_prior}_mom{momentum_prior}_drop{dropout_prob}/prior/'
+    os.makedirs(folder, exist_ok=True)
+
+    net0 = CNNet9l(dropout_prob=dropout_prob).to(device)
+
+    # prior_file = 'results/fclassic_cifar10_cnn_sig0.03_pmin1e-05_lr0.001_mom0.95_kl1_drop0.2/prior/prior_net.pth'
+
+    # if os.path.exists(prior_file):
+    #     net0.load_state_dict(torch.load(prior_file, map_location=device))
+    #     print("Loaded prior")
+    # else:
+    #     raise RuntimeError(f'Prior file {prior_file} not found')
+
+    optimizer = optim.SGD(net0.parameters(), lr=learning_rate_prior, momentum=momentum_prior)
+
+    prior_loss_tr = torch.zeros(prior_epochs)
+    prior_err_tr = torch.zeros(prior_epochs)
+    for epoch in range(prior_epochs):
+        train_loss, train_err = trainNNet(net0, optimizer, epoch, valid_loader, device=device, verbose=True)
+
+        prior_loss_tr[epoch] = train_loss
+        prior_err_tr[epoch] = train_err
     
+    loss_net0, error_net0 = testNNet(net0, test_loader, device=device)
+
+    plt.figure()
+    plt.plot(range(1,prior_epochs+1), prior_loss_tr)
+    plt.xlabel('Epochs')
+    plt.ylabel('Prior NLL loss')
+    plt.title(f'Prior NLL loss  {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr prior {learning_rate_prior}, momentum prior {momentum_prior}, dropout {dropout_prob}')
+    plt.savefig(f'{folder}/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_lr{learning_rate_prior}_mom{momentum_prior}_drop{dropout_prob}_prior_loss.pdf', dpi=300, bbox_inches='tight')
+
+    plt.figure()
+    plt.plot(range(1,prior_epochs+1), prior_err_tr)
+    plt.xlabel('Epochs')
+    plt.ylabel('Prior 0-1 error')
+    plt.title(f'Prior 0-1 error  {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr prior {learning_rate_prior}, momentum prior {momentum_prior}, dropout {dropout_prob}')
+    plt.savefig(f'{folder}/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_lr{learning_rate_prior}_mom{momentum_prior}_drop{dropout_prob}_prior_err.pdf', dpi=300, bbox_inches='tight')
+
+    torch.save(net0.state_dict(), f'{folder}/prior_net.pth')
+
     posterior_n_size = len(train_loader.dataset)
     bound_n_size = len(val_bound.dataset)
 
@@ -678,10 +709,8 @@ def test_exp(name_data='cifar10', sigma_prior=0.03, dropout_prob=0.2, batch_size
     # load probabilistic model
     toolarge = True
     net = ProbCNNet9lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, device=device, init_net=net0).to(device)
-    net_wired = ProbCNNet9l(rho_prior, prior_dist=prior_dist, device=device, init_net=net0).to(device)
 
     net.eval()
-    net_wired.eval()
 
     kl = net.compute_kl()
 
@@ -690,21 +719,11 @@ def test_exp(name_data='cifar10', sigma_prior=0.03, dropout_prob=0.2, batch_size
     cross_entropy_empirical = 0.0
     total_empirical = 0.0
 
-    correct_empirical_net0 = 0.0
-    cross_entropy_empirical_net0 = 0.0
-    total_empirical_net0 = 0.0
-
-    for data_batch, target_batch in tqdm(val_bound):
+    for data_batch, target_batch in tqdm(valid_loader):
         data_batch, target_batch = data_batch.to(device), target_batch.to(device)
-
-        outputs_net0 = net0(data_batch)
-        loss_net0 = compute_empirical_risk(outputs_net0, target_batch, pmin, clamping)
-        pred_net0 = outputs_net0.max(1, keepdim=True)[1]
-        correct_empirical_net0 += pred_net0.eq(target_batch.view_as(pred_net0)).sum().item()
-        total_empirical_net0 += target_batch.size(0)
-        cross_entropy_empirical_net0 += loss_net0.item()
         
         for _ in range(mc_samples):
+        
             outputs = net(data_batch, sample=True, wireless=False, clamping=clamping, pmin=pmin)
             loss_ce = compute_empirical_risk(outputs, target_batch, pmin, clamping)
             pred = outputs.max(1, keepdim=True)[1]
@@ -714,33 +733,20 @@ def test_exp(name_data='cifar10', sigma_prior=0.03, dropout_prob=0.2, batch_size
 
     cross_entropy_empirical /= (len(val_bound) * mc_samples)
     error_empirical = 1.0 - (correct_empirical / total_empirical)
-    cross_entropy_empirical_net0 /= len(val_bound)
-    error_empirical_net0 = 1.0 - (correct_empirical_net0 / total_empirical_net0)
 
     # compute population risk
     correct_population = 0.0
     cross_entropy_population = 0.0
     total_population = 0.0
 
-    correct_population_net0 = 0.0
-    cross_entropy_population_net0 = 0.0
-    total_population_net0 = 0.0
 
     with torch.no_grad():
         for data, target in tqdm(test_loader):
             data, target = data.to(device), target.to(device)
 
-            outputs_net0 = net0(data)
-            loss_net0 = compute_empirical_risk(outputs_net0, target, pmin, clamping)
-            pred_net0 = outputs_net0.max(1, keepdim=True)[1]
-            correct_population_net0 += pred_net0.eq(target.view_as(pred_net0)).sum().item()
-            total_population_net0 += target.size(0)
-            cross_entropy_population_net0 += loss_net0.item()
-
             for _ in range(mc_samples):
 
                 outputs = net(data, sample=True, wireless=True, clamping=clamping, pmin=pmin)
-
                 loss_ce = compute_empirical_risk(outputs, target, pmin, clamping)
                 pred = outputs.max(1, keepdim=True)[1]
                 correct_population += pred.eq(target.view_as(pred)).sum().item()
@@ -749,10 +755,8 @@ def test_exp(name_data='cifar10', sigma_prior=0.03, dropout_prob=0.2, batch_size
 
     cross_entropy_population /= (len(test_loader) * mc_samples)
     error_population = 1.0 - (correct_population / total_population)
-    cross_entropy_population_net0 /= len(test_loader)
-    error_population_net0 = 1.0 - (correct_population_net0 / total_population_net0)
 
     print(f"***Final results***")
-    print(f"Dataset: {name_data}, Sigma: {sigma_prior :.5f}, pmin: {pmin :.5f}, Dropout: {dropout_prob :.5f}, Perc_train: {perc_train :.5f}, Perc_prior: {perc_prior :.5f}, L_0: {l_0}, Channel: {channel_type}, Outage: {outage :.5f}, MC samples: {mc_samples}, Clamping: {clamping}, Prior empirical error: {error_empirical_net0 :.5f}, Prior empirical CE loss: {cross_entropy_empirical_net0 :.5f}, Prior population error: {error_population_net0 :.5f}, Prior population CE loss: {cross_entropy_population_net0 :.5f}, Empirical error: {error_empirical :.5f}, Empirical CE loss: {cross_entropy_empirical :.5f}, Population error: {error_population :.5f}, Population CE loss: {cross_entropy_population :.5f}, KL: {kl :.5f}")
+    print(f"Dataset: {name_data}, Sigma: {sigma_prior :.5f}, pmin: {pmin :.5f}, Dropout: {dropout_prob :.5f}, Perc_train: {perc_train :.5f}, Perc_prior: {perc_prior :.5f}, L_0: {l_0}, Channel: {channel_type}, Outage: {outage :.5f}, MC samples: {mc_samples}, Clamping: {clamping}, Empirical error: {error_empirical :.5f}, Empirical CE loss: {cross_entropy_empirical :.5f}, Population error: {error_population :.5f}, Population CE loss: {cross_entropy_population :.5f}, KL: {kl :.5f}")
 
     print('Done!')

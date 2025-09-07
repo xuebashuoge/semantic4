@@ -113,11 +113,8 @@ def loadbatches(train, test, loader_kargs, batch_size, prior=False, perc_train=1
         prior_loader = torch.utils.data.DataLoader(train, batch_size=batch_size, sampler=valid_sampler, shuffle=False)
         test_loader = torch.utils.data.DataLoader(test, batch_size=batch_size, shuffle=True, **loader_kargs)
 
-    # train_loader comprises all the data used in training and prior_loader the data used to build
-    # the prior
+    # train_loader comprises all the data used in training and prior_loader the data used to build the prior
     # set_bound_1batch and set_bound are the set of data points used to evaluate the bound.
-    # the only difference between these two is that onf of them is splitted in multiple batches
-    # while the 1batch one is only one batch. This is for computational efficiency with some
-    # of the large architectures used.
+    # the only difference between these two is that one of them is splitted in multiple batches while the 1batch one is only one batch. This is for computational efficiency with some of the large architectures used.
     # The same is done for test_1batch
     return train_loader, test_loader, prior_loader, set_bound_1batch, test_1batch, set_val_bound

@@ -31,12 +31,4 @@ if __name__ == '__main__':
 
     test_exp(outage=0.1, device=device)
 
-    test_exp(outage=0.2, device=device)
-
-    test_exp(outage=0.3, device=device)
-
-    test_exp(outage=0.4, device=device)
-
-    test_exp(outage=0.5, device=device)
-
     print('All tests done!')
