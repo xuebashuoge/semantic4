@@ -1399,7 +1399,7 @@ def trainPNNet2(net, optimizer, epoch, train_loader, device, clamping, pmin, ver
         output = net(data, sample=True, clamping=clamping, pmin=pmin)
 
         loss = compute_empirical_risk(output, target, pmin, clamping=clamping)
-        kl_sum += net.compute_kl() / len(train_loader.dataset)
+        kl_sum += net.compute_kl()
 
         loss.backward()
         optimizer.step()

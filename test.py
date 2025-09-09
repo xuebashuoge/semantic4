@@ -11,7 +11,9 @@ Test script
 
 import torch
 import numpy as np
-from pbb.utils import test_exp
+from argparse import Namespace
+from pbb.utils import test_exp, train_and_certificate, my_exp
+from pbb.data import loaddataset, loadbatches
 
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -29,8 +31,85 @@ if __name__ == '__main__':
     elif device == 'mps':
         torch.use_deterministic_algorithms(True)
 
-    test_exp(learning_rate=0.001, momentum=0.95, epochs=100, outage=0.1, device=device, prior_epochs=20, mc_samples=200)
+    args_dict = {
+        'name': 'myexp',
+        'name_data': 'cifar10',
+        'model': 'cnn',
+        'layers': 9,
+        'prior_dist': 'gaussian',
+        'sigma_prior': 0.03,
+        'l_0': 2,
+        'channel_type': 'bec',
+        'outage': 0.1,
+        'noise_var': 1,
+        'batch_size': 250,
+        'perc_train': 1.0,
+        'perc_prior': 0.5,
+        'prior_epochs': 20,
+        'learning_rate_prior': 0.01,
+        'momentum_prior': 0.95,
+        'epochs': 100,
+        'learning_rate': 0.001,
+        'momentum': 0.95,
+        'dropout_prob': 0.2,
+        'mc_samples': 200,
+        'clamping': True,
+        'pmin': 1e-5,
+        'num_workers': 8,
+    }
 
-    test_exp(learning_rate=0.001, momentum=0.95, epochs=100, outage=0.2, device=device, prior_epochs=20, mc_samples=200)
+    args = Namespace(**args_dict)
+
+    loader_kargs = {'num_workers': args.num_workers, 'pin_memory': True} if torch.cuda.is_available() else {'num_workers': args.num_workers}
+
+    train, test = loaddataset(args.name_data)
+
+    train_loader, test_loader, valid_loader, _, _, bound_loader = loadbatches(train, test, loader_kargs, args.batch_size, prior=True, perc_train=args.perc_train, perc_prior=args.perc_prior)
+
+    args.name = 'prior0.5-train1.0-empirical1.0'
+    args.l_0 = 2
+    args.outage = 0.1
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, device=device)
+
+    args.outage = 0.2
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, device=device)
+
+    args.l_0 = 4
+    args.outage = 0.1
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, device=device)
+
+    args.outage = 0.2
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, device=device)
+
+    args.name = 'prior0.5-train0.5-empirical0.5'
+    args.l_0 = 2
+    args.outage = 0.1
+
+    train_and_certificate(args, train_loader=bound_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=bound_loader, population_loader=test_loader, device=device)
+
+    args.outage = 0.2
+
+    train_and_certificate(args, train_loader=bound_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=bound_loader, population_loader=test_loader, device=device)
+
+    args.l_0 = 4
+    args.outage = 0.1
+
+    train_and_certificate(args, train_loader=bound_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=bound_loader, population_loader=test_loader, device=device)
+
+    args.outage = 0.2
+
+    train_and_certificate(args, train_loader=bound_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=bound_loader, population_loader=test_loader, device=device)
+
+    # test_exp(learning_rate=0.001, momentum=0.95, epochs=1, prior_epochs=1, l_0=2, outage=0.1, mc_samples=1, device=device)
+
+    # test_exp(learning_rate=0.001, momentum=0.95, epochs=1, prior_epochs=1, l_0=2, outage=0.2, mc_samples=1, device=device)
+
+    # test_exp(learning_rate=0.001, momentum=0.95, epochs=1, prior_epochs=1, l_0=4, outage=0.1, mc_samples=1, device=device)
+
+    # test_exp(learning_rate=0.001, momentum=0.95, epochs=1, prior_epochs=1, l_0=4, outage=0.2, mc_samples=1, device=device)
 
     print('All tests done!')
