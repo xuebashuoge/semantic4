@@ -407,7 +407,7 @@ class ProbLinear(nn.Module):
 
         self.kl_div = 0
 
-    def forward(self, input, sample=False):
+    def forward(self, input, sample=False, kl=False):
         if self.training or sample:
             # during training we sample from the model distribution
             # sample = True can also be set during testing if we
@@ -418,7 +418,7 @@ class ProbLinear(nn.Module):
             # otherwise we use the posterior mean
             weight = self.weight.mu
             bias = self.bias.mu
-        if self.training:
+        if self.training or kl:
             # sum of the KL computed for weights and biases
             self.kl_div = self.weight.compute_kl(self.weight_prior) + self.bias.compute_kl(self.bias_prior)
 
@@ -524,7 +524,7 @@ class ProbConv2d(nn.Module):
 
         self.kl_div = 0
 
-    def forward(self, input, sample=False):
+    def forward(self, input, sample=False, kl=False):
         if self.training or sample:
             # during training we sample from the model distribution
             # sample = True can also be set during testing if we
@@ -535,10 +535,10 @@ class ProbConv2d(nn.Module):
             # otherwise we use the posterior mean
             weight = self.weight.mu
             bias = self.bias.mu
-        if self.training:
+
+        if self.training or kl:
             # sum of the KL computed for weights and biases
-            self.kl_div = self.weight.compute_kl(
-                self.weight_prior) + self.bias.compute_kl(self.bias_prior)
+            self.kl_div = self.weight.compute_kl(self.weight_prior) + self.bias.compute_kl(self.bias_prior)
 
         return F.conv2d(input, weight, bias, self.stride, self.padding, self.dilation, self.groups)
 
@@ -600,7 +600,7 @@ class CNNet4l(nn.Module):
         self.conv2 = nn.Conv2d(32, 64, 3, 1)
         self.fc1 = nn.Linear(9216, 128)
         self.fc2 = nn.Linear(128, 10)
-        self.d = nn.Dropout2d(dropout_prob)
+        self.d = nn.Dropout(dropout_prob)
 
     def forward(self, x):
         x = self.d(self.conv1(x))
@@ -742,7 +742,7 @@ class CNNet9l(nn.Module):
         self.fcl1 = nn.Linear(4096, 1024)
         self.fcl2 = nn.Linear(1024, 512)
         self.fcl3 = nn.Linear(512, 10)
-        self.d = nn.Dropout2d(dropout_prob)
+        self.d = nn.Dropout(dropout_prob)
 
     def forward(self, x):
         # conv layers
@@ -800,53 +800,55 @@ class ProbCNNet9lChannel(nn.Module):
 
 
 
-    def forward(self, x, sample=False, wireless=False, clamping=True, pmin=1e-4):
+    def forward(self, x, sample=False, wireless=False, kl=False, clamping=True, pmin=1e-4):
         # conv layers
         if self.l_0 == 0:
             x = self.channel(x, wireless)
-        x = F.relu(self.conv1(x, sample))
+        x = F.relu(self.conv1(x, sample, kl))
         
         if self.l_0 == 1:
             x = self.channel(x, wireless)
-        x = F.relu(self.conv2(x, sample))
+        x = F.relu(self.conv2(x, sample, kl))
         x = F.max_pool2d(x, kernel_size=2, stride=2)
         
         if self.l_0 == 2:
             x = self.channel(x, wireless)
-        x = F.relu(self.conv3(x, sample))
+        x = F.relu(self.conv3(x, sample, kl))
         
         if self.l_0 == 3:
             x = self.channel(x, wireless)
-        x = F.relu(self.conv4(x, sample))
+        x = F.relu(self.conv4(x, sample, kl))
         x = F.max_pool2d(x, kernel_size=2, stride=2)
 
         if self.l_0 == 4:
             x = self.channel(x, wireless)
-        x = F.relu(self.conv5(x, sample))
+        x = F.relu(self.conv5(x, sample, kl))
 
         if self.l_0 == 5:
             x = self.channel(x, wireless)
-        x = F.relu(self.conv6(x, sample))
+        x = F.relu(self.conv6(x, sample, kl))
         x = F.max_pool2d(x, kernel_size=2, stride=2)
         # flatten
         x = x.view(x.size(0), -1)
         # fc layer
         if self.l_0 == 6:
             x = self.channel(x, wireless)
-        x = F.relu(self.fcl1(x, sample))
+        x = F.relu(self.fcl1(x, sample, kl))
 
         if self.l_0 == 7:
             x = self.channel(x, wireless)
-        x = F.relu(self.fcl2(x, sample))
+        x = F.relu(self.fcl2(x, sample, kl))
 
         if self.l_0 == 8:
             x = self.channel(x, wireless)
-        x = self.fcl3(x, sample)
+        x = self.fcl3(x, sample, kl)
         x = output_transform(x, clamping, pmin)
         return x
 
     def compute_kl(self):
         kl = self.conv1.kl_div + self.conv2.kl_div + self.conv3.kl_div + self.conv4.kl_div + self.conv5.kl_div + self.conv6.kl_div + self.fcl1.kl_div + self.fcl2.kl_div + self.fcl3.kl_div
+        
+        # extra term for KL of channel layer
         return kl
 
 class ProbCNNet9l(nn.Module):
@@ -1344,6 +1346,73 @@ def testNNet(net, test_loader, device='cuda', verbose=True):
     print(f"-Prior: Test loss: {loss_sum/len(test_loader):.5f}, Test err: {1-(correct/(len(test_loader)*test_loader.batch_size)):.5f}")
     
     return loss_sum/len(test_loader), 1-(correct/(len(test_loader)*test_loader.batch_size))
+
+def compute_empirical_risk(outputs, targets, pmin, clamping=True):
+    # compute negative log likelihood loss and bound it with pmin (if applicable)
+    # rescaling by log(1/pmin) if clamping
+    empirical_risk = F.nll_loss(outputs, targets)
+    if clamping == True:
+        empirical_risk = (1./(np.log(1./pmin))) * empirical_risk
+    return empirical_risk
+
+def trainPNNet2(net, optimizer, epoch, train_loader, device, clamping, pmin, verbose=False):
+    """Train function for a probabilistic NN (including CNN)
+
+    Parameters
+    ----------
+    net : ProbNNet/ProbCNNet object
+        Network object to train
+
+    optimizer : optim object
+        Optimizer to use (e.g. SGD/Adam)
+
+    pbobj : pbobj object
+        PAC-Bayes inspired training objective to use for training
+
+    epoch : int
+        Current training epoch
+
+    train_loader: DataLoader object
+        Train loader to use for training
+
+    lambda_var : Lambda_var object
+        Lambda variable for training objective flamb
+
+    optimizer_lambda : optim object
+        Optimizer to use for the learning the lambda_variable
+
+    device : string
+        Device the code will run in (e.g. 'cuda')
+
+    verbose: bool
+        Whether to print test metrics
+
+    """
+    net.train()
+    # variables that keep information about the results of optimising the bound
+    correct, loss_sum, kl_sum = 0.0, 0.0, 0.0
+
+    for data, target in tqdm(train_loader):
+        data, target = data.to(device), target.to(device)
+        net.zero_grad()
+        
+        output = net(data, sample=True, clamping=clamping, pmin=pmin)
+
+        loss = compute_empirical_risk(output, target, pmin, clamping=clamping)
+        kl_sum += net.compute_kl() / len(train_loader.dataset)
+
+        loss.backward()
+        optimizer.step()
+
+        pred = output.max(1, keepdim=True)[1]
+        correct += pred.eq(target.view_as(pred)).sum().item()
+        loss_sum += loss.detach().item()
+
+    if verbose:
+        # show the average of the metrics during the epoch
+        print(f"-Epoch {epoch :.5f}, Train loss: {loss_sum/len(train_loader) :.5f}, Train err: {1-(correct/(len(train_loader)*train_loader.batch_size)):.5f}, KL: {kl_sum/len(train_loader):.5f}")
+
+    return loss_sum/len(train_loader), 1-(correct/(len(train_loader)*train_loader.batch_size)), kl_sum/len(train_loader)
 
 
 def trainPNNet(net, optimizer, pbobj, epoch, train_loader, lambda_var=None, optimizer_lambda=None, verbose=False):

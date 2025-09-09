@@ -29,6 +29,8 @@ if __name__ == '__main__':
     elif device == 'mps':
         torch.use_deterministic_algorithms(True)
 
-    test_exp(outage=0.1, device=device)
+    test_exp(learning_rate=0.001, momentum=0.95, epochs=100, outage=0.1, device=device, prior_epochs=20, mc_samples=200)
+
+    test_exp(learning_rate=0.001, momentum=0.95, epochs=100, outage=0.2, device=device, prior_epochs=20, mc_samples=200)
 
     print('All tests done!')

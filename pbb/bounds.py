@@ -156,17 +156,13 @@ class PBBobj():
         else:
             error_ce, error_01 = self.mcsampling(net, input, target, batches=False, clamping=True)
 
-        empirical_risk_ce = inv_kl(
-            error_ce.item(), np.log(2/self.delta_test)/self.mc_samples)
-        empirical_risk_01 = inv_kl(
-            error_01, np.log(2/self.delta_test)/self.mc_samples)
+        empirical_risk_ce = inv_kl(error_ce.item(), np.log(2/self.delta_test)/self.mc_samples)
+        empirical_risk_01 = inv_kl(error_01, np.log(2/self.delta_test)/self.mc_samples)
 
         train_obj = self.bound(empirical_risk_ce, kl, self.n_posterior, lambda_var)
 
-        risk_ce = inv_kl(empirical_risk_ce, (kl + np.log((2 *
-                                                             np.sqrt(self.n_bound))/self.delta_test))/self.n_bound)
-        risk_01 = inv_kl(empirical_risk_01, (kl + np.log((2 *
-                                                             np.sqrt(self.n_bound))/self.delta_test))/self.n_bound)
+        risk_ce = inv_kl(empirical_risk_ce, (kl + np.log((2 * np.sqrt(self.n_bound))/self.delta_test))/self.n_bound)
+        risk_01 = inv_kl(empirical_risk_01, (kl + np.log((2 * np.sqrt(self.n_bound))/self.delta_test))/self.n_bound)
         return train_obj.item(), kl/self.n_bound, empirical_risk_ce, empirical_risk_01, risk_ce, risk_01
 
 

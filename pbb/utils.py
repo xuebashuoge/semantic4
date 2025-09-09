@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from torchvision import datasets, transforms
 from torchvision.utils import make_grid
 from tqdm import tqdm, trange
-from pbb.models import NNet4l, CNNet4l, ProbNNet4l, ProbCNNet4l, ProbCNNet9l, ProbCNNet9lChannel, CNNet9l, CNNet13l, ProbCNNet13l, ProbCNNet15l, CNNet15l, trainNNet, testNNet, Lambda_var, trainPNNet, computeRiskCertificates, testPosteriorMean, testStochastic, testEnsemble
+from pbb.models import NNet4l, CNNet4l, ProbNNet4l, ProbCNNet4l, ProbCNNet9l, ProbCNNet9lChannel, CNNet9l, CNNet13l, ProbCNNet13l, ProbCNNet15l, CNNet15l, trainNNet, testNNet, Lambda_var, trainPNNet,trainPNNet2, computeRiskCertificates, testPosteriorMean, testStochastic, testEnsemble, compute_empirical_risk
 from pbb.bounds import PBBobj
 from pbb import data
 from pbb.data import loaddataset, loadbatches
@@ -641,17 +641,12 @@ def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-def compute_empirical_risk(outputs, targets, pmin, bounded=True):
-    # compute negative log likelihood loss and bound it with pmin (if applicable)
-    empirical_risk = F.nll_loss(outputs, targets)
-    if bounded == True:
-        empirical_risk = (1./(np.log(1./pmin))) * empirical_risk
-    return empirical_risk
-
-def test_exp(model='cnn', name_data='cifar10', sigma_prior=0.03, learning_rate_prior=0.01, momentum_prior=0.95, prior_epochs=70, dropout_prob=0.2, batch_size=250, perc_train=1.0, perc_prior=0.5, prior_dist='gaussian', l_0=2, channel_type='bec', outage=0.1, mc_samples=100, clamping=True, pmin=1e-5, device='cuda'):
 
 
-    loader_kargs = {'num_workers': 1, 'pin_memory': True} if torch.cuda.is_available() else {}
+def test_exp(learning_rate, momentum, epochs, model='cnn', name_data='cifar10', sigma_prior=0.03, learning_rate_prior=0.01, momentum_prior=0.95, prior_epochs=70, dropout_prob=0.2, batch_size=250, perc_train=1.0, perc_prior=0.5, prior_dist='gaussian', l_0=2, channel_type='bec', outage=0.1, noise_var = 1, mc_samples=100, clamping=True, pmin=1e-5, device='cuda', num_workers=8):
+
+
+    loader_kargs = {'num_workers': num_workers, 'pin_memory': True} if torch.cuda.is_available() else {'num_workers': num_workers}
 
     train, test = loaddataset(name_data)
     rho_prior = math.log(math.exp(sigma_prior)-1.0)
@@ -659,67 +654,346 @@ def test_exp(model='cnn', name_data='cifar10', sigma_prior=0.03, learning_rate_p
     
     train_loader, test_loader, valid_loader, val_bound_one_batch, _, val_bound = loadbatches(train, test, loader_kargs, batch_size, prior=True, perc_train=perc_train, perc_prior=perc_prior)
 
-    folder = f'results/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_lr{learning_rate_prior}_mom{momentum_prior}_drop{dropout_prob}/prior/'
-    os.makedirs(folder, exist_ok=True)
+    folder = f'results/prior/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_{prior_dist}_epoch{prior_epochs}_bs{batch_size}_lr{learning_rate_prior}_mom{momentum_prior}_drop{dropout_prob}/'
 
     net0 = CNNet9l(dropout_prob=dropout_prob).to(device)
 
-    # prior_file = 'results/fclassic_cifar10_cnn_sig0.03_pmin1e-05_lr0.001_mom0.95_kl1_drop0.2/prior/prior_net.pth'
+    train_prior(net0, valid_loader, test_loader, folder, model, name_data, sigma_prior, learning_rate_prior, momentum_prior, prior_epochs, dropout_prob, perc_train, perc_prior, device)
 
-    # if os.path.exists(prior_file):
-    #     net0.load_state_dict(torch.load(prior_file, map_location=device))
-    #     print("Loaded prior")
-    # else:
-    #     raise RuntimeError(f'Prior file {prior_file} not found')
-
-    optimizer = optim.SGD(net0.parameters(), lr=learning_rate_prior, momentum=momentum_prior)
-
-    prior_loss_tr = torch.zeros(prior_epochs)
-    prior_err_tr = torch.zeros(prior_epochs)
-    for epoch in range(prior_epochs):
-        train_loss, train_err = trainNNet(net0, optimizer, epoch, valid_loader, device=device, verbose=True)
-
-        prior_loss_tr[epoch] = train_loss
-        prior_err_tr[epoch] = train_err
+    # if os.path.exists(f'{folder}/prior_net.pth'):
+    #     net0.load_state_dict(torch.load(f'{folder}/prior_net.pth', map_location=device))
+    #     prior_results_dict = torch.load(f'{folder}/prior_results_dict.pth', map_location=device)
+    #     prior_loss_tr = prior_results_dict['prior_loss_tr']
+    #     prior_err_tr = prior_results_dict['prior_err_tr']
+    #     loss_net0 = prior_results_dict['loss_net0']
+    #     error_net0 = prior_results_dict['error_net0']
+    #     print(f"Loaded prior from {folder}/prior_net.pth")
+    #     print(f"train loss last epoch {prior_loss_tr[-1]}, train err last epoch {prior_err_tr[-1]}, test loss {loss_net0}, test err {error_net0}")
     
-    loss_net0, error_net0 = testNNet(net0, test_loader, device=device)
+    # else:
+    #     optimizer = optim.SGD(net0.parameters(), lr=learning_rate_prior, momentum=momentum_prior)
 
-    plt.figure()
-    plt.plot(range(1,prior_epochs+1), prior_loss_tr)
-    plt.xlabel('Epochs')
-    plt.ylabel('Prior NLL loss')
-    plt.title(f'Prior NLL loss  {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr prior {learning_rate_prior}, momentum prior {momentum_prior}, dropout {dropout_prob}')
-    plt.savefig(f'{folder}/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_lr{learning_rate_prior}_mom{momentum_prior}_drop{dropout_prob}_prior_loss.pdf', dpi=300, bbox_inches='tight')
+    #     prior_loss_tr = torch.zeros(prior_epochs)
+    #     prior_err_tr = torch.zeros(prior_epochs)
+    #     for epoch in range(prior_epochs):
+    #         train_loss, train_err = trainNNet(net0, optimizer, epoch, valid_loader, device=device, verbose=True)
 
-    plt.figure()
-    plt.plot(range(1,prior_epochs+1), prior_err_tr)
-    plt.xlabel('Epochs')
-    plt.ylabel('Prior 0-1 error')
-    plt.title(f'Prior 0-1 error  {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr prior {learning_rate_prior}, momentum prior {momentum_prior}, dropout {dropout_prob}')
-    plt.savefig(f'{folder}/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_lr{learning_rate_prior}_mom{momentum_prior}_drop{dropout_prob}_prior_err.pdf', dpi=300, bbox_inches='tight')
+    #         prior_loss_tr[epoch] = train_loss
+    #         prior_err_tr[epoch] = train_err
+        
+    #     loss_net0, error_net0 = testNNet(net0, test_loader, device=device)
 
-    torch.save(net0.state_dict(), f'{folder}/prior_net.pth')
+    #     plt.figure()
+    #     plt.plot(range(1,prior_epochs+1), prior_loss_tr)
+    #     plt.xlabel('Epochs')
+    #     plt.ylabel('Prior NLL loss')
+    #     plt.title(f'Prior NLL loss  {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr prior {learning_rate_prior}, momentum prior {momentum_prior}, dropout {dropout_prob}')
+    #     plt.savefig(f'{folder}/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_epochpri{prior_epochs}_lrpri{learning_rate_prior}_mompri{momentum_prior}_drop{dropout_prob}_prior_loss.pdf', dpi=300, bbox_inches='tight')
 
-    posterior_n_size = len(train_loader.dataset)
-    bound_n_size = len(val_bound.dataset)
+    #     plt.figure()
+    #     plt.plot(range(1,prior_epochs+1), prior_err_tr)
+    #     plt.xlabel('Epochs')
+    #     plt.ylabel('Prior 0-1 error')
+    #     plt.title(f'Prior 0-1 error  {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr prior {learning_rate_prior}, momentum prior {momentum_prior}, dropout {dropout_prob}')
+    #     plt.savefig(f'{folder}/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_epochpri{prior_epochs}_lrpri{learning_rate_prior}_mompri{momentum_prior}_drop{dropout_prob}_prior_err.pdf', dpi=300, bbox_inches='tight')
 
-    train_size = len(train_loader.dataset)
-    classes = len(train_loader.dataset.classes)
+    #     torch.save(net0.state_dict(), f'{folder}/prior_net.pth')
+
+    #     prior_results_dict = {
+    #         'name_data': name_data,
+    #         'model': model,
+    #         'sigma_prior': sigma_prior,
+    #         'pmin': pmin,
+    #         'learning_rate_prior': learning_rate_prior,
+    #         'momentum_prior': momentum_prior,
+    #         'prior_epochs': prior_epochs,
+    #         'dropout_prob': dropout_prob,
+    #         'perc_train': perc_train,
+    #         'perc_prior': perc_prior,
+    #         'loss_net0': loss_net0,
+    #         'error_net0': error_net0,
+    #         'prior_loss_tr': prior_loss_tr,
+    #         'prior_err_tr': prior_err_tr,
+    #     }
+    #     torch.save(prior_results_dict, f'{folder}/prior_results_dict.pth')
+
+
 
     # load probabilistic model
-    toolarge = True
     net = ProbCNNet9lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, device=device, init_net=net0).to(device)
 
-    net.eval()
+    folder = f'results/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_{prior_dist}_epoch{epochs}_bs{batch_size}_lr{learning_rate}_mom{momentum}_drop{dropout_prob}/'
+    kl = train_posterior(net, train_loader, learning_rate, momentum, epochs, folder, model, name_data, sigma_prior, dropout_prob, clamping, pmin, device)
 
-    kl = net.compute_kl()
+    # optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=momentum)
+
+    # loss_tr = torch.zeros(epochs)
+    # err_tr = torch.zeros(epochs)
+
+    # for epoch in range(epochs):
+    #     train_loss, train_err = trainPNNet2(net, optimizer, epoch, train_loader, device=device, clamping=clamping, pmin=pmin, verbose=True)
+    #     loss_tr[epoch] = train_loss
+    #     err_tr[epoch] = train_err
+
+    # folder = f'results/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_{prior_dist}_epoch{epochs}_bs{batch_size}_lr{learning_rate}_mom{momentum}_drop{dropout_prob}/posterior/'
+    # os.makedirs(folder, exist_ok=True)
+
+    # torch.save(optimizer.state_dict(), f'{folder}/posterior_net.pth')
+
+    # plt.figure()
+    # plt.plot(range(1,epochs+1), loss_tr)
+    # plt.xlabel('Epochs')
+    # plt.ylabel('NLL loss')
+    # plt.title(f'NLL loss  {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr {learning_rate}, momentum {momentum}, dropout {dropout_prob}')
+    # plt.savefig(f'{folder}/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_epoch{epochs}_lr{learning_rate}_mom{momentum}_drop{dropout_prob}_loss.pdf', dpi=300, bbox_inches='tight')
+
+    # plt.figure()
+    # plt.plot(range(1,epochs+1), err_tr)
+    # plt.xlabel('Epochs')
+    # plt.ylabel('0-1 error')
+    # plt.title(f'0-1 error  {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr {learning_rate}, momentum {momentum}, dropout {dropout_prob}')
+    # plt.savefig(f'{folder}/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_epoch{epochs}_lr{learning_rate}_mom{momentum}_drop{dropout_prob}_err.pdf', dpi=300, bbox_inches='tight')
+
+    folder = f'results/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_{prior_dist}_epoch{epochs}_bs{batch_size}_lr{learning_rate}_mom{momentum}_drop{dropout_prob}/certificate/'
+
+    # compute empirical and population risks
+    compute_certificate(net, train_loader, test_loader, folder, learning_rate, momentum, epochs, kl, model, name_data, sigma_prior, learning_rate_prior, momentum_prior, prior_epochs, dropout_prob, batch_size, perc_train, perc_prior, prior_dist, l_0, channel_type, outage, noise_var, mc_samples, clamping, pmin, device)
+
+    # kl = net.compute_kl()
+
+    # net.eval()
+
+    # # compute empirical risk using mc samples
+    # correct_empirical = 0.0
+    # cross_entropy_empirical = 0.0
+    # total_empirical = 0.0
+
+    # for data_batch, target_batch in tqdm(train_loader):
+    #     data_batch, target_batch = data_batch.to(device), target_batch.to(device)
+        
+    #     for _ in range(mc_samples):
+        
+    #         outputs = net(data_batch, sample=True, wireless=False, clamping=clamping, pmin=pmin)
+    #         loss_ce = compute_empirical_risk(outputs, target_batch, pmin, clamping)
+    #         pred = outputs.max(1, keepdim=True)[1]
+    #         correct_empirical += pred.eq(target_batch.view_as(pred)).sum().item()
+    #         total_empirical += target_batch.size(0)
+    #         cross_entropy_empirical += loss_ce.item()
+
+    # cross_entropy_empirical /= (len(val_bound) * mc_samples)
+    # error_empirical = 1.0 - (correct_empirical / total_empirical)
+
+    # # compute population risk
+    # correct_population = 0.0
+    # cross_entropy_population = 0.0
+    # total_population = 0.0
+
+
+    # with torch.no_grad():
+    #     for data, target in tqdm(test_loader):
+    #         data, target = data.to(device), target.to(device)
+
+    #         for _ in range(mc_samples):
+                
+                
+    #             outputs = net(data, sample=True, wireless=True, clamping=clamping, pmin=pmin)
+                
+    #             loss_ce = compute_empirical_risk(outputs, target, pmin, clamping)
+    #             pred = outputs.max(1, keepdim=True)[1]
+    #             correct_population += pred.eq(target.view_as(pred)).sum().item()
+    #             total_population += target.size(0)
+    #             cross_entropy_population += loss_ce.item()
+
+    # cross_entropy_population /= (len(test_loader) * mc_samples)
+    # error_population = 1.0 - (correct_population / total_population)
+
+
+    # print(f"***Final results***")
+    # print(f"Dataset: {name_data}, Sigma: {sigma_prior :.5f}, pmin: {pmin :.5f}, Dropout: {dropout_prob :.5f}, Perc_train: {perc_train :.5f}, Perc_prior: {perc_prior :.5f}, L_0: {l_0}, Channel: {channel_type}, Outage: {outage :.5f}, MC samples: {mc_samples}, Clamping: {clamping}, Empirical error: {error_empirical :.5f}, Empirical CE loss: {cross_entropy_empirical :.5f}, Population error: {error_population :.5f}, Population CE loss: {cross_entropy_population :.5f}, KL: {kl :.5f}")
+
+    # results_dict = {
+    #     'name_data': name_data,
+    #     'model': model,
+    #     'sigma_prior': sigma_prior,
+    #     'pmin': pmin,
+    #     'dropout_prob': dropout_prob,
+    #     'perc_train': perc_train,
+    #     'perc_prior': perc_prior,
+    #     'l_0': l_0,
+    #     'channel_type': channel_type,
+    #     'outage': outage,
+    #     'mc_samples': mc_samples,
+    #     'clamping': clamping,
+    #     'learning_rate': learning_rate,
+    #     'momentum': momentum,
+    #     'train_epochs': epochs,
+    #     'learning_rate_prior': learning_rate_prior,
+    #     'momentum_prior': momentum_prior,
+    #     'prior_epochs': prior_epochs,
+    #     'loss_tr': loss_tr,
+    #     'err_tr': err_tr,
+    #     'error_empirical': error_empirical,
+    #     'cross_entropy_empirical': cross_entropy_empirical,
+    #     'error_population': error_population,
+    #     'cross_entropy_population': cross_entropy_population,
+    #     'kl': kl
+    # }
+
+    # folder = f'results/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_{prior_dist}_epoch{epochs}_bs{batch_size}_lr{learning_rate}_mom{momentum}_drop{dropout_prob}/certificate/'
+    # os.makedirs(folder, exist_ok=True)
+
+    # torch.save(results_dict, f'{folder}/{name_data}_{model}_{channel_type.lower()}_{f'outage{outage}' if channel_type.lower() == 'bec' else f'noise{noise_var}'}_chan-layer{l_0}_sig{sigma_prior}_pmin{pmin}_epoch{epochs}_lr{learning_rate}_mom{momentum}_drop{dropout_prob}_mcsamples{mc_samples}_results.pth')
+
+    print('Done!')
+
+def train_prior(net0, train_loader, test_loader, folder, model='cnn', name_data='cifar10', sigma_prior=0.03, learning_rate_prior=0.01, momentum_prior=0.95, prior_epochs=70, dropout_prob=0.2, perc_train=1.0, perc_prior=0.5, device='cuda'):
+    
+    os.makedirs(folder, exist_ok=True)
+    prior_file = f'{folder}/epochpri{prior_epochs}_lrpri{learning_rate_prior}_mompri{momentum_prior}_prior_net.pth'
+
+    if os.path.exists(prior_file):
+        net0.load_state_dict(torch.load(prior_file, map_location=device))
+        prior_results_dict = torch.load(f'{folder}/epochpri{prior_epochs}_lrpri{learning_rate_prior}_mompri{momentum_prior}_prior_results.pth', map_location=device)
+        prior_loss_tr = prior_results_dict['prior_loss_tr']
+        prior_err_tr = prior_results_dict['prior_err_tr']
+        loss_net0 = prior_results_dict['loss_net0']
+        error_net0 = prior_results_dict['error_net0']
+        print(f"Loaded prior from {folder}/prior_net.pth")
+        print(f"train loss last epoch {prior_loss_tr[-1]:.4f}, train err last epoch {prior_err_tr[-1]:.4f}, test loss {loss_net0:.4f}, test err {error_net0:.4f}")
+    
+    else:
+        optimizer = optim.SGD(net0.parameters(), lr=learning_rate_prior, momentum=momentum_prior)
+
+        prior_loss_tr = torch.zeros(prior_epochs)
+        prior_err_tr = torch.zeros(prior_epochs)
+        for epoch in range(prior_epochs):
+            train_loss, train_err = trainNNet(net0, optimizer, epoch, train_loader, device=device, verbose=True)
+
+            prior_loss_tr[epoch] = train_loss
+            prior_err_tr[epoch] = train_err
+        
+        loss_net0, error_net0 = testNNet(net0, test_loader, device=device)
+
+        plt.figure()
+        plt.plot(range(1,prior_epochs+1), prior_loss_tr)
+        plt.xlabel('Epochs')
+        plt.ylabel('Prior NLL loss')
+        plt.title(f'Prior NLL loss  {name_data}, {model}, sigma prior {sigma_prior}, lr prior {learning_rate_prior}, momentum prior {momentum_prior}, dropout {dropout_prob}')
+        plt.savefig(f'{folder}/{name_data}_{model}_sig{sigma_prior}_epochpri{prior_epochs}_lrpri{learning_rate_prior}_mompri{momentum_prior}_drop{dropout_prob}_prior_loss.pdf', dpi=300, bbox_inches='tight')
+
+        plt.figure()
+        plt.plot(range(1,prior_epochs+1), prior_err_tr)
+        plt.xlabel('Epochs')
+        plt.ylabel('Prior 0-1 error')
+        plt.title(f'Prior 0-1 error  {name_data}, {model}, sigma prior {sigma_prior}, lr prior {learning_rate_prior}, momentum prior {momentum_prior}, dropout {dropout_prob}')
+        plt.savefig(f'{folder}/{name_data}_{model}_sig{sigma_prior}_epochpri{prior_epochs}_lrpri{learning_rate_prior}_mompri{momentum_prior}_drop{dropout_prob}_prior_err.pdf', dpi=300, bbox_inches='tight')
+
+        torch.save(net0.state_dict(), prior_file)
+
+        prior_results_dict = {
+            'name_data': name_data,
+            'model': model,
+            'sigma_prior': sigma_prior,
+            'learning_rate_prior': learning_rate_prior,
+            'momentum_prior': momentum_prior,
+            'prior_epochs': prior_epochs,
+            'dropout_prob': dropout_prob,
+            'perc_train': perc_train,
+            'perc_prior': perc_prior,
+            'loss_net0': loss_net0,
+            'error_net0': error_net0,
+            'prior_loss_tr': prior_loss_tr,
+            'prior_err_tr': prior_err_tr,
+        }
+
+    torch.save(prior_results_dict, f'{folder}/epochpri{prior_epochs}_lrpri{learning_rate_prior}_mompri{momentum_prior}_prior_results.pth')
+
+def train_posterior(net, train_loader, learning_rate, momentum, epochs, folder, model='cnn', name_data='cifar10', sigma_prior=0.03, dropout_prob=0.2, clamping=True, pmin=1e-5, device='cuda'):
+    
+    os.makedirs(folder, exist_ok=True)
+    posterior_file = f'{folder}/posterior_net.pth'
+
+    if os.path.exists(posterior_file):
+        net.load_state_dict(torch.load(posterior_file, map_location=device))
+        posterior_results_dict = torch.load(f'{folder}/posterior_results_dict.pth', map_location=device)
+        loss_tr = posterior_results_dict['loss_tr']
+        err_tr = posterior_results_dict['err_tr']
+        kl = posterior_results_dict['kl']
+
+        print(f"Loaded posterior from {posterior_file}")
+        print(f"train loss last epoch {loss_tr[-1]:.4f}, train err last epoch {err_tr[-1]:.4f}, kl {kl:.4f}")
+    else:
+
+        optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=momentum)
+
+        loss_tr = torch.zeros(epochs)
+        err_tr = torch.zeros(epochs)
+        kl_tr = torch.zeros(epochs)
+
+        for epoch in range(epochs):
+            train_loss, train_err, train_kl = trainPNNet2(net, optimizer, epoch, train_loader, device=device, clamping=clamping, pmin=pmin, verbose=True)
+            loss_tr[epoch] = train_loss
+            err_tr[epoch] = train_err
+            kl_tr[epoch] = train_kl
+
+        kl = net.compute_kl() / len(train_loader.dataset)
+
+        plt.figure()
+        plt.plot(range(1,epochs+1), loss_tr)
+        plt.xlabel('Epochs')
+        plt.ylabel('NLL loss')
+        plt.title(f'NLL loss  {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr {learning_rate}, momentum {momentum}, dropout {dropout_prob}')
+        plt.savefig(f'{folder}/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_epoch{epochs}_lr{learning_rate}_mom{momentum}_drop{dropout_prob}_loss.pdf', dpi=300, bbox_inches='tight')
+
+        plt.figure()
+        plt.plot(range(1,epochs+1), err_tr)
+        plt.xlabel('Epochs')
+        plt.ylabel('0-1 error')
+        plt.title(f'0-1 error  {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr {learning_rate}, momentum {momentum}, dropout {dropout_prob}')
+        plt.savefig(f'{folder}/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_epoch{epochs}_lr{learning_rate}_mom{momentum}_drop{dropout_prob}_err.pdf', dpi=300, bbox_inches='tight')
+
+        plt.figure()
+        plt.plot(range(1,epochs+1), kl_tr)
+        plt.xlabel('Epochs')
+        plt.ylabel('KL divergence')
+        plt.title(f'KL divergence  {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr {learning_rate}, momentum {momentum}, dropout {dropout_prob}')
+        plt.savefig(f'{folder}/{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_epoch{epochs}_lr{learning_rate}_mom{momentum}_drop{dropout_prob}_kl.pdf', dpi=300, bbox_inches='tight')
+
+        
+        torch.save(net.state_dict(), f'{folder}/posterior_net.pth')
+
+        posterior_results_dict = {
+            'name_data': name_data,
+            'model': model,
+            'sigma_prior': sigma_prior,
+            'pmin': pmin,
+            'dropout_prob': dropout_prob,
+            'learning_rate': learning_rate,
+            'momentum': momentum,
+            'train_epochs': epochs,
+            'loss_tr': loss_tr,
+            'err_tr': err_tr,
+            'kl_tr': kl_tr,
+            'kl': kl
+        }
+
+        torch.save(posterior_results_dict, f'{folder}/posterior_results_dict.pth')
+    
+    return kl
+
+
+def compute_certificate(net, train_loader, test_loader, folder, learning_rate, momentum, epochs, kl, model='cnn', name_data='cifar10', sigma_prior=0.03, learning_rate_prior=0.01, momentum_prior=0.95, prior_epochs=70, dropout_prob=0.2, batch_size=250, perc_train=1.0, perc_prior=0.5, prior_dist='gaussian', l_0=2, channel_type='bec', outage=0.1, noise_var=1, mc_samples=100, clamping=True, pmin=1e-5, device='cuda'):
+
+    os.makedirs(folder, exist_ok=True)
+
+    net.eval()
 
     # compute empirical risk using mc samples
     correct_empirical = 0.0
     cross_entropy_empirical = 0.0
     total_empirical = 0.0
 
-    for data_batch, target_batch in tqdm(valid_loader):
+    for data_batch, target_batch in tqdm(train_loader):
         data_batch, target_batch = data_batch.to(device), target_batch.to(device)
         
         for _ in range(mc_samples):
@@ -731,7 +1005,7 @@ def test_exp(model='cnn', name_data='cifar10', sigma_prior=0.03, learning_rate_p
             total_empirical += target_batch.size(0)
             cross_entropy_empirical += loss_ce.item()
 
-    cross_entropy_empirical /= (len(val_bound) * mc_samples)
+    cross_entropy_empirical /= (len(train_loader) * mc_samples)
     error_empirical = 1.0 - (correct_empirical / total_empirical)
 
     # compute population risk
@@ -745,8 +1019,10 @@ def test_exp(model='cnn', name_data='cifar10', sigma_prior=0.03, learning_rate_p
             data, target = data.to(device), target.to(device)
 
             for _ in range(mc_samples):
-
+                
+                
                 outputs = net(data, sample=True, wireless=True, clamping=clamping, pmin=pmin)
+                
                 loss_ce = compute_empirical_risk(outputs, target, pmin, clamping)
                 pred = outputs.max(1, keepdim=True)[1]
                 correct_population += pred.eq(target.view_as(pred)).sum().item()
@@ -756,7 +1032,37 @@ def test_exp(model='cnn', name_data='cifar10', sigma_prior=0.03, learning_rate_p
     cross_entropy_population /= (len(test_loader) * mc_samples)
     error_population = 1.0 - (correct_population / total_population)
 
+
     print(f"***Final results***")
     print(f"Dataset: {name_data}, Sigma: {sigma_prior :.5f}, pmin: {pmin :.5f}, Dropout: {dropout_prob :.5f}, Perc_train: {perc_train :.5f}, Perc_prior: {perc_prior :.5f}, L_0: {l_0}, Channel: {channel_type}, Outage: {outage :.5f}, MC samples: {mc_samples}, Clamping: {clamping}, Empirical error: {error_empirical :.5f}, Empirical CE loss: {cross_entropy_empirical :.5f}, Population error: {error_population :.5f}, Population CE loss: {cross_entropy_population :.5f}, KL: {kl :.5f}")
 
-    print('Done!')
+    results_dict = {
+        'name_data': name_data,
+        'model': model,
+        'sigma_prior': sigma_prior,
+        'pmin': pmin,
+        'dropout_prob': dropout_prob,
+        'batch_size': batch_size,
+        'prior_dist': prior_dist,
+        'perc_train': perc_train,
+        'perc_prior': perc_prior,
+        'l_0': l_0,
+        'channel_type': channel_type,
+        'outage': outage,
+        'mc_samples': mc_samples,
+        'clamping': clamping,
+        'learning_rate': learning_rate,
+        'momentum': momentum,
+        'train_epochs': epochs,
+        'learning_rate_prior': learning_rate_prior,
+        'momentum_prior': momentum_prior,
+        'prior_epochs': prior_epochs,
+        'error_empirical': error_empirical,
+        'cross_entropy_empirical': cross_entropy_empirical,
+        'error_population': error_population,
+        'cross_entropy_population': cross_entropy_population,
+        'kl': kl
+    }
+
+
+    torch.save(results_dict, f'{folder}/{name_data}_{model}_{channel_type.lower()}_{f'outage{outage}' if channel_type.lower() == 'bec' else f'noise{noise_var}'}_chan-layer{l_0}_sig{sigma_prior}_pmin{pmin}_epoch{epochs}_lr{learning_rate}_mom{momentum}_drop{dropout_prob}_mcsamples{mc_samples}_results.pth')
