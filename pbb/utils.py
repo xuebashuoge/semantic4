@@ -615,5 +615,11 @@ def compute_certificate(net, empirical_loader, population_loader, folder, kl, ar
         'kl': kl
     }
 
+    if args.channel_type.lower() == 'rayleigh':
+        channel_specs = f'noise{args.noise_var}'
+    elif args.channel_type.lower() == 'bec':
+        channel_specs = f'outage{args.outage}'
+    else:
+        channel_specs = 'nochannel'
 
-    torch.save(results_dict, f'{folder}/{args.channel_type.lower()}_{f'outage{args.outage}' if args.channel_type.lower() == 'bec' else f'noise{args.noise_var}'}_chan-layer{args.l_0}_mcsamples{args.mc_samples}_results.pth')
+    torch.save(results_dict, f'{folder}/{args.channel_type.lower()}_{channel_specs}_chan-layer{args.l_0}_mcsamples{args.mc_samples}_results.pth')

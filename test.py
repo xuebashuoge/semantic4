@@ -48,7 +48,7 @@ if __name__ == '__main__':
         'prior_epochs': 20,
         'learning_rate_prior': 0.01,
         'momentum_prior': 0.95,
-        'epochs': 100,
+        'epochs': 500,
         'learning_rate': 0.001,
         'momentum': 0.95,
         'dropout_prob': 0.2,
@@ -85,24 +85,24 @@ if __name__ == '__main__':
 
     train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, device=device)
 
-    args.name = 'prior0.5-train0.5-empirical0.5'
-    args.l_0 = 2
-    args.outage = 0.1
+    # args.name = 'prior0.5-train0.5-empirical0.5'
+    # args.l_0 = 2
+    # args.outage = 0.1
 
-    train_and_certificate(args, train_loader=bound_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=bound_loader, population_loader=test_loader, device=device)
+    # train_and_certificate(args, train_loader=bound_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=bound_loader, population_loader=test_loader, device=device)
 
-    args.outage = 0.2
+    # args.outage = 0.2
 
-    train_and_certificate(args, train_loader=bound_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=bound_loader, population_loader=test_loader, device=device)
+    # train_and_certificate(args, train_loader=bound_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=bound_loader, population_loader=test_loader, device=device)
 
-    args.l_0 = 4
-    args.outage = 0.1
+    # args.l_0 = 4
+    # args.outage = 0.1
 
-    train_and_certificate(args, train_loader=bound_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=bound_loader, population_loader=test_loader, device=device)
+    # train_and_certificate(args, train_loader=bound_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=bound_loader, population_loader=test_loader, device=device)
 
-    args.outage = 0.2
+    # args.outage = 0.2
 
-    train_and_certificate(args, train_loader=bound_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=bound_loader, population_loader=test_loader, device=device)
+    # train_and_certificate(args, train_loader=bound_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=bound_loader, population_loader=test_loader, device=device)
 
     # test_exp(learning_rate=0.001, momentum=0.95, epochs=1, prior_epochs=1, l_0=2, outage=0.1, mc_samples=1, device=device)
 
