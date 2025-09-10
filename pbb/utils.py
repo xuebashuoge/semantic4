@@ -97,7 +97,10 @@ def train_prior(net0, train_loader, test_loader, folder, args, device='cuda'):
 
     if os.path.exists(prior_file):
         net0.load_state_dict(torch.load(prior_file, weights_only=False, map_location=device))
-        prior_results_dict = torch.load(f'{folder}/prior_results.pth', weights_only=False, map_location=device)
+        try:
+            prior_results_dict = torch.load(f'{folder}/prior_results.pth', weights_only=False, map_location=device)
+        except TypeError:
+            prior_results_dict = torch.load(f'{folder}/prior_results.pth', map_location=device)
         prior_loss_tr = prior_results_dict['prior_loss_tr']
         prior_err_tr = prior_results_dict['prior_err_tr']
         loss_net0 = prior_results_dict['loss_net0']
@@ -149,7 +152,10 @@ def train_posterior(net, train_loader, folder, args, device='cuda'):
 
     if os.path.exists(posterior_file):
         net.load_state_dict(torch.load(posterior_file, weights_only=False, map_location=device))
-        posterior_results_dict = torch.load(f'{folder}/posterior_results_dict.pth', weights_only=False, map_location=device)
+        try:
+            posterior_results_dict = torch.load(f'{folder}/posterior_results_dict.pth', weights_only=False, map_location=device)
+        except TypeError:
+            posterior_results_dict = torch.load(f'{folder}/posterior_results_dict.pth', map_location=device)
         loss_tr = posterior_results_dict['loss_tr']
         err_tr = posterior_results_dict['err_tr']
         kl = posterior_results_dict['kl']
