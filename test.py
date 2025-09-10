@@ -16,11 +16,18 @@ from pbb.utils import test_exp, train_and_certificate, my_exp
 from pbb.data import loaddataset, loadbatches
 
 if __name__ == '__main__':
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"CUDA: {torch.cuda.is_available()}")
-    device = torch.device("mps" if torch.backends.mps.is_available() else device)
-    print("MPS: ", torch.backends.mps.is_available())
-    print(f"Using device: {device}")
+    # This is the key: a robust, version-agnostic way to select the device.
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        print("CUDA is available. Using GPU.")
+    # Check if MPS is available (for macOS with Apple Silicon)
+    # The 'hasattr' check is crucial for compatibility with older PyTorch versions
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = torch.device("mps")
+        print("MPS is available. Using Apple Silicon GPU.")
+    else:
+        device = torch.device("cpu")
+        print("No GPU available. Using CPU.")
 
     # this makes the initialised prior the same for all bounds
     torch.manual_seed(7)
