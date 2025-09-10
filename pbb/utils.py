@@ -1,6 +1,7 @@
 import math
 import os
 import numpy as np
+import itertools
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,366 +12,12 @@ import matplotlib.pyplot as plt
 from torchvision import datasets, transforms
 from torchvision.utils import make_grid
 from tqdm import tqdm, trange
-from pbb.models import NNet4l, CNNet4l, ProbNNet4l, ProbCNNet4l, ProbCNNet9l, ProbCNNet9lChannel, CNNet9l, CNNet13l, ProbCNNet13l, ProbCNNet15l, CNNet15l, trainNNet, testNNet, Lambda_var, trainPNNet,trainPNNet2, computeRiskCertificates, testPosteriorMean, testStochastic, testEnsemble, compute_empirical_risk
+from pbb.models import ProbLinear, ProbConv2d, NNet4l, CNNet4l, ProbNNet4l, ProbCNNet4l, ProbCNNet9l, ProbCNNet9lChannel, CNNet9l, CNNet13l, ProbCNNet13l, ProbCNNet15l, CNNet15l, trainNNet, testNNet, Lambda_var, trainPNNet,trainPNNet2, computeRiskCertificates, testPosteriorMean, testStochastic, testEnsemble, compute_empirical_risk
 from pbb.bounds import PBBobj
 from pbb import data
 from pbb.data import loaddataset, loadbatches
 
-# TODOS: 1. make a train prior function (bbb, erm)
-#        2. make train posterior function 
-#        3. rename partitions of data (prior_data, posterior_data, eval_data)
-#        4. implement early stopping with validation set & speed
-#        5. add data augmentation (maria)
-#        6. better way of logging
 
-def train_standard(net, train_loader, test_loader, optimizer, epochs, device='cuda', verbose=True):
-    epoch_train_loss = torch.zeros(epochs)
-    epoch_train_err = torch.zeros(epochs)
-    epoch_test_loss = torch.zeros(epochs)
-    epoch_test_err = torch.zeros(epochs)
-
-    for epoch in trange(epochs):
-        net.train()
-        train_loss = 0
-        train_err = 0
-        for data, target in tqdm(train_loader):
-            data, target = data.to(device), target.to(device)
-            net.zero_grad()
-            output = net(data)
-            loss = F.nll_loss(output, target)
-            loss.backward()
-            optimizer.step()
-            pred = output.data.max(1, keepdim=True)[1]
-
-            train_loss += loss.detach().item()
-            train_err += pred.ne(target.data.view_as(pred)).sum().item()
-
-        train_loss /= len(train_loader)
-        train_err /= len(train_loader) * train_loader.batch_size
-        epoch_train_loss[epoch] = train_loss
-        epoch_train_err[epoch] = train_err
-
-        if verbose:
-            print(f'Train Epoch: {epoch} \tLoss: {train_loss:.6f}\tError: {train_err:.4f}')
-
-        test_loss = 0
-        test_err = 0
-        net.eval()
-        with torch.no_grad():
-            for data, target in tqdm(test_loader):
-                data, target = data.to(device), target.to(device)
-                output = net(data)
-                test_loss += F.nll_loss(output, target, reduction='sum').item()
-                pred = output.data.max(1, keepdim=True)[1]
-                test_err += pred.ne(target.data.view_as(pred)).sum().item()
-
-        test_loss /= len(test_loader)
-        test_err /= len(test_loader) * test_loader.batch_size
-
-        epoch_test_loss[epoch] = test_loss
-        epoch_test_err[epoch] = test_err
-
-        if verbose:
-            print(f'Test set: Average loss: {test_loss:.4f}, Error: {test_err:.4f}\n')
-
-    return epoch_train_loss, epoch_train_err, epoch_test_loss, epoch_test_err
-
-
-
-def runexp(name_data, objective, prior_type, model, sigma_prior, pmin, learning_rate, momentum, 
-learning_rate_prior=0.01, momentum_prior=0.95, delta=0.025, layers=9, delta_test=0.01, mc_samples=1000, 
-samples_ensemble=100, kl_penalty=1, initial_lamb=6.0, train_epochs=100, prior_dist='gaussian', 
-verbose=False, device='cuda', prior_epochs=20, dropout_prob=0.2, perc_train=1.0, verbose_test=False, 
-perc_prior=0.2, batch_size=250):
-    """Run an experiment with PAC-Bayes inspired training objectives
-
-    Parameters
-    ----------
-    name_data : string
-        name of the dataset to use (check data file for more info)
-
-    objective : string
-        training objective to use
-
-    prior_type : string
-        could be rand or learnt depending on whether the prior 
-        is data-free or data-dependent
-    
-    model : string
-        could be cnn or fcn
-    
-    sigma_prior : float
-        scale hyperparameter for the prior
-    
-    pmin : float
-        minimum probability to clamp the output of the cross entropy loss
-    
-    learning_rate : float
-        learning rate hyperparameter used for the optimiser
-
-    momentum : float
-        momentum hyperparameter used for the optimiser
-
-    learning_rate_prior : float
-        learning rate used in the optimiser for learning the prior (only
-        applicable if prior is learnt)
-
-    momentum_prior : float
-        momentum used in the optimiser for learning the prior (only
-        applicable if prior is learnt)
-    
-    delta : float
-        confidence parameter for the risk certificate
-    
-    layers : int
-        integer indicating the number of layers (applicable for CIFAR-10, 
-        to choose between 9, 13 and 15)
-    
-    delta_test : float
-        confidence parameter for chernoff bound
-
-    mc_samples : int
-        number of monte carlo samples for estimating the risk certificate
-        (set to 1000 by default as it is more computationally efficient, 
-        although larger values lead to tighter risk certificates)
-
-    samples_ensemble : int
-        number of members for the ensemble predictor
-
-    kl_penalty : float
-        penalty for the kl coefficient in the training objective
-
-    initial_lamb : float
-        initial value for the lambda variable used in flamb objective
-        (scaled later)
-    
-    train_epochs : int
-        numer of training epochs for training
-
-    prior_dist : string
-        type of prior and posterior distribution (can be gaussian or laplace)
-
-    verbose : bool
-        whether to print metrics during training
-
-    device : string
-        device the code will run in (e.g. 'cuda')
-
-    prior_epochs : int
-        number of epochs used for learning the prior (not applicable if prior is rand)
-
-    dropout_prob : float
-        probability of an element to be zeroed.
-
-    perc_train : float
-        percentage of train data to use for the entire experiment (can be used to run
-        experiments with reduced datasets to test small data scenarios)
-    
-    verbose_test : bool
-        whether to print test and risk certificate stats during training epochs
-
-    perc_prior : float
-        percentage of data to be used to learn the prior
-
-    batch_size : int
-        batch size for experiments
-    """
-
-    # this makes the initialised prior the same for all bounds
-    torch.manual_seed(7)
-    np.random.seed(0)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-    loader_kargs = {'num_workers': 1,
-                    'pin_memory': True} if torch.cuda.is_available() else {}
-
-    train, test = data.loaddataset(name_data)
-    rho_prior = math.log(math.exp(sigma_prior)-1.0)
-
-    if prior_type == 'rand':
-        dropout_prob = 0.0
-
-    # initialise model
-    if model == 'cnn':
-        if name_data == 'cifar10':
-            # only cnn models are tested for cifar10, fcns are only used 
-            # with mnist
-            if layers == 9:
-                net0 = CNNet9l(dropout_prob=dropout_prob).to(device)
-            elif layers == 13:
-                net0 = CNNet13l(dropout_prob=dropout_prob).to(device)
-            elif layers == 15:
-                net0 = CNNet15l(dropout_prob=dropout_prob).to(device)
-            else: 
-                raise RuntimeError(f'Wrong number of layers {layers}')
-        else:
-            net0 = CNNet4l(dropout_prob=dropout_prob).to(device)
-    else:
-        net0 = NNet4l(dropout_prob=dropout_prob, device=device).to(device)
-
-    folder = f'results/{objective}_{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_lr{learning_rate}_mom{momentum}_kl{kl_penalty}_drop{dropout_prob}/prior/'
-    os.makedirs(folder, exist_ok=True)
-    
-    if prior_type == 'rand':
-        train_loader, test_loader, _, val_bound_one_batch, _, val_bound = data.loadbatches(
-            train, test, loader_kargs, batch_size, prior=False, perc_train=perc_train, perc_prior=perc_prior)
-        errornet0 = testNNet(net0, test_loader, device=device)
-    elif prior_type == 'learnt':
-        train_loader, test_loader, valid_loader, val_bound_one_batch, _, val_bound = data.loadbatches(
-            train, test, loader_kargs, batch_size, prior=True, perc_train=perc_train, perc_prior=perc_prior)
-        optimizer = optim.SGD(
-            net0.parameters(), lr=learning_rate_prior, momentum=momentum_prior)
-        
-        prior_loss_list = []
-        prior_err_list = []
-        for epoch in trange(prior_epochs):
-            train_loss, train_err = trainNNet(net0, optimizer, epoch, valid_loader,
-                      device=device, verbose=verbose)
-            prior_loss_list.append(train_loss)
-            prior_err_list.append(train_err)
-
-        errornet0 = testNNet(net0, test_loader, device=device)
-        
-
-        
-        plt.figure()
-        plt.plot(range(1,prior_epochs+1), prior_loss_list)
-        plt.xlabel('Epochs')
-        plt.ylabel('Prior NLL loss')
-        plt.title(f'Prior NLL loss {objective}, {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr prior {learning_rate_prior}, momentum prior {momentum_prior}, dropout {dropout_prob}')
-        plt.savefig(f'{folder}/{objective}_{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_lrpri{learning_rate_prior}_mompri{momentum_prior}_kl{kl_penalty}_drop{dropout_prob}_prior_loss.pdf', dpi=300, bbox_inches='tight')
-
-        plt.figure()
-        plt.plot(range(1,prior_epochs+1), prior_err_list)
-        plt.xlabel('Epochs')
-        plt.ylabel('Prior 0-1 error')
-        plt.title(f'Prior 0-1 error {objective}, {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr prior {learning_rate_prior}, momentum prior {momentum_prior}, dropout {dropout_prob}')
-        plt.savefig(f'{folder}/{objective}_{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_lrpri{learning_rate_prior}_mompri{momentum_prior}_kl{kl_penalty}_drop{dropout_prob}_prior_err.pdf', dpi=300, bbox_inches='tight')
-    else:
-        raise RuntimeError(f'Wrong prior type {prior_type}')
-    
-    torch.save(net0.state_dict(), f'{folder}/prior_net.pth')
-
-
-    posterior_n_size = len(train_loader.dataset)
-    bound_n_size = len(val_bound.dataset)
-
-    toolarge = False
-    train_size = len(train_loader.dataset)
-    classes = len(train_loader.dataset.classes)
-
-    if model == 'cnn':
-        toolarge = True
-        if name_data == 'cifar10':
-            if layers == 9:
-                net = ProbCNNet9l(rho_prior, prior_dist=prior_dist,
-                                    device=device, init_net=net0).to(device)
-            elif layers == 13:
-                net = ProbCNNet13l(rho_prior, prior_dist=prior_dist,
-                                   device=device, init_net=net0).to(device)
-            elif layers == 15: 
-                net = ProbCNNet15l(rho_prior, prior_dist=prior_dist,
-                                   device=device, init_net=net0).to(device)
-            else: 
-                raise RuntimeError(f'Wrong number of layers {layers}')
-        else:
-            net = ProbCNNet4l(rho_prior, prior_dist=prior_dist,
-                          device=device, init_net=net0).to(device)
-    elif model == 'fcn':
-        if name_data == 'cifar10':
-            raise RuntimeError(f'Cifar10 not supported with given architecture {model}')
-        elif name_data == 'mnist':
-            net = ProbNNet4l(rho_prior, prior_dist=prior_dist,
-                        device=device, init_net=net0).to(device)
-    else:
-        raise RuntimeError(f'Architecture {model} not supported')
-    # import ipdb
-    # ipdb.set_trace()
-    bound = PBBobj(objective, pmin, classes, delta,
-                    delta_test, mc_samples, kl_penalty, device, n_posterior = posterior_n_size, n_bound=bound_n_size)
-
-    if objective == 'flamb':
-        lambda_var = Lambda_var(initial_lamb, train_size).to(device)
-        optimizer_lambda = optim.SGD(lambda_var.parameters(), lr=learning_rate, momentum=momentum)
-    else:
-        optimizer_lambda = None
-        lambda_var = None
-
-    optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=momentum)
-
-    bound_list = []
-    kl_list = []
-    err_list = []
-    loss_list = []
-
-    for epoch in trange(train_epochs):
-        avg_bound, avg_kl, avg_loss, avg_err = trainPNNet(net, optimizer, bound, epoch, train_loader, lambda_var, optimizer_lambda, verbose)
-        bound_list.append(avg_bound)
-        kl_list.append(avg_kl)
-        err_list.append(avg_err)
-        loss_list.append(avg_loss)
-        if verbose_test and ((epoch+1) % 5 == 0):
-            train_obj, risk_ce, risk_01, kl, loss_ce_train, loss_01_train = computeRiskCertificates(net, toolarge,
-            bound, device=device, lambda_var=lambda_var, train_loader=val_bound, whole_train=val_bound_one_batch)
-
-            stch_loss, stch_err = testStochastic(net, test_loader, bound, device=device)
-            post_loss, post_err = testPosteriorMean(net, test_loader, bound, device=device)
-            ens_loss, ens_err = testEnsemble(net, test_loader, bound, device=device, samples=samples_ensemble)
-
-            print(f"***Checkpoint results***")         
-            print(f"Objective, Dataset, Sigma, pmin, LR, momentum, LR_prior, momentum_prior, kl_penalty, dropout, Obj_train, Risk_CE, Risk_01, KL, Train NLL loss, Train 01 error, Stch loss, Stch 01 error, Post mean loss, Post mean 01 error, Ens loss, Ens 01 error, 01 error prior net, perc_train, perc_prior")
-            print(f"{objective}, {name_data}, {sigma_prior :.5f}, {pmin :.5f}, {learning_rate :.5f}, {momentum :.5f}, {learning_rate_prior :.5f}, {momentum_prior :.5f}, {kl_penalty : .5f}, {dropout_prob :.5f}, {train_obj :.5f}, {risk_ce :.5f}, {risk_01 :.5f}, {kl :.5f}, {loss_ce_train :.5f}, {loss_01_train :.5f}, {stch_loss :.5f}, {stch_err :.5f}, {post_loss :.5f}, {post_err :.5f}, {ens_loss :.5f}, {ens_err :.5f}, {errornet0 :.5f}, {perc_train :.5f}, {perc_prior :.5f}")
-
-    train_obj, risk_ce, risk_01, kl, loss_ce_train, loss_01_train = computeRiskCertificates(net, toolarge, bound, device=device,
-    lambda_var=lambda_var, train_loader=val_bound, whole_train=val_bound_one_batch)
-
-    stch_loss, stch_err = testStochastic(net, test_loader, bound, device=device)
-    post_loss, post_err = testPosteriorMean(net, test_loader, bound, device=device)
-    ens_loss, ens_err = testEnsemble(net, test_loader, bound, device=device, samples=samples_ensemble)
-
-    print(f"***Final results***") 
-    print(f"Objective: {objective}, Dataset: {name_data}, Sigma: {sigma_prior :.5f}, pmin: {pmin :.5f}, LR: {learning_rate :.5f}, momentum: {momentum :.5f}, LR_prior: {learning_rate_prior :.5f}, momentum_prior: {momentum_prior :.5f}, kl_penalty: {kl_penalty : .5f}, dropout: {dropout_prob :.5f}, Obj_train: {train_obj :.5f}, Risk_CE: {risk_ce :.5f}, Risk_01: {risk_01 :.5f}, KL: {kl :.5f}, Train NLL loss: {loss_ce_train :.5f}, Train 01 error: {loss_01_train :.5f}, Stch loss: {stch_loss :.5f}, Stch 01 error: {stch_err :.5f}, Post mean loss: {post_loss :.5f}, Post mean 01 error: {post_err :.5f}, Ens loss: {ens_loss :.5f}, Ens 01 error: {ens_err :.5f}, 01 error prior net: {errornet0 :.5f}, perc_train: {perc_train :.5f}, perc_prior: {perc_prior :.5f}")
-    # print(f"{objective}, {name_data}, {sigma_prior :.5f}, {pmin :.5f}, {learning_rate :.5f}, {momentum :.5f}, {learning_rate_prior :.5f}, {momentum_prior :.5f}, {kl_penalty : .5f}, {dropout_prob :.5f}, {train_obj :.5f}, {risk_ce :.5f}, {risk_01 :.5f}, {kl :.5f}, {loss_ce_train :.5f}, {loss_01_train :.5f}, {stch_loss :.5f}, {stch_err :.5f}, {post_loss :.5f}, {post_err :.5f}, {ens_loss :.5f}, {ens_err :.5f}, {errornet0 :.5f}, {perc_train :.5f}, {perc_prior :.5f}")
-
-    folder = f'figures/{objective}_{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_lr{learning_rate}_mom{momentum}_kl{kl_penalty}_drop{dropout_prob}/'
-    os.makedirs(folder, exist_ok=True)
-
-    plt.figure()
-    plt.plot(range(1,train_epochs+1), bound_list)
-    plt.xlabel('Epochs')
-    plt.ylabel('Training objective')
-    plt.title(f'Training objective {objective}, {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr {learning_rate}, momentum {momentum}, kl penalty {kl_penalty}, dropout {dropout_prob}')
-    plt.savefig(f'{folder}/{objective}_{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_lr{learning_rate}_mom{momentum}_kl{kl_penalty}_drop{dropout_prob}_obj.pdf', dpi=300, bbox_inches='tight')
-
-    plt.figure()
-    plt.plot(range(1,train_epochs+1), kl_list)
-    plt.xlabel('Epochs')
-    plt.ylabel('KL divergence')
-    plt.title(f'KL divergence {objective}, {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr {learning_rate}, momentum {momentum}, kl penalty {kl_penalty}, dropout {dropout_prob}')
-    plt.savefig(f'{folder}/{objective}_{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_lr{learning_rate}_mom{momentum}_kl{kl_penalty}_drop{dropout_prob}_kl.pdf', dpi=300, bbox_inches='tight')
-    
-    plt.figure()
-    plt.plot(range(1,train_epochs+1), loss_list)
-    plt.xlabel('Epochs')
-    plt.ylabel('Training NLL loss')
-    plt.title(f'Training NLL loss {objective}, {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr {learning_rate}, momentum {momentum}, kl penalty {kl_penalty}, dropout {dropout_prob}')
-    plt.savefig(f'{folder}/{objective}_{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_lr{learning_rate}_mom{momentum}_kl{kl_penalty}_drop{dropout_prob}_loss.pdf', dpi=300, bbox_inches='tight')
-    
-    plt.figure()
-    plt.plot(range(1,train_epochs+1), err_list)
-    plt.xlabel('Epochs')
-    plt.ylabel('Training 0-1 error')
-    plt.title(f'Training 0-1 error {objective}, {name_data}, {model}, sigma prior {sigma_prior}, pmin {pmin}, lr {learning_rate}, momentum {momentum}, kl penalty {kl_penalty}, dropout {dropout_prob}')
-    plt.savefig(f'{folder}/{objective}_{name_data}_{model}_sig{sigma_prior}_pmin{pmin}_lr{learning_rate}_mom{momentum}_kl{kl_penalty}_drop{dropout_prob}_err.pdf', dpi=300, bbox_inches='tight')
-    # plt.close('all')
-
-    torch.save(net.state_dict(), f'{folder}/posterior_net.pth')
-
-
-
-def count_parameters(model): 
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 def my_exp(args, device='cuda', num_workers=8):
     loader_kargs = {'num_workers': num_workers, 'pin_memory': True} if torch.cuda.is_available() else {'num_workers': num_workers}
@@ -440,6 +87,8 @@ def test_exp(learning_rate, momentum, epochs, model='cnn', name_data='cifar10', 
     compute_certificate(net, train_loader, test_loader, folder, learning_rate, momentum, epochs, kl, model, name_data, sigma_prior, learning_rate_prior, momentum_prior, prior_epochs, dropout_prob, batch_size, perc_train, perc_prior, prior_dist, l_0, channel_type, outage, noise_var, mc_samples, clamping, pmin, device)
 
     print('Done!')
+
+
 
 def train_prior(net0, train_loader, test_loader, folder, args, device='cuda'):
     
@@ -520,8 +169,8 @@ def train_posterior(net, train_loader, folder, args, device='cuda'):
             loss_tr[epoch] = train_loss
             err_tr[epoch] = train_err
             kl_tr[epoch] = train_kl
-
-        kl = net.compute_kl() / len(train_loader.dataset)
+            
+        kl = net.compute_kl()
 
         plt.figure()
         plt.plot(range(1,args.epochs+1), loss_tr)
@@ -563,6 +212,9 @@ def compute_certificate(net, empirical_loader, population_loader, folder, kl, ar
 
     net.eval()
 
+    # compute Lipschitz constant L_w
+    L_w = compute_lipschitz_constant_efficient(net, [empirical_loader, population_loader], args.mc_samples, args.pmin, args.clamping, device)
+
     # compute empirical risk using mc samples
     correct_empirical = 0.0
     cross_entropy_empirical = 0.0
@@ -585,7 +237,6 @@ def compute_certificate(net, empirical_loader, population_loader, folder, kl, ar
     correct_population = 0.0
     cross_entropy_population = 0.0
 
-
     with torch.no_grad():
         for data, target in tqdm(population_loader):
             data, target = data.to(device), target.to(device)
@@ -601,6 +252,14 @@ def compute_certificate(net, empirical_loader, population_loader, folder, kl, ar
 
     cross_entropy_population /= (len(population_loader) * args.mc_samples)
     error_population = 1.0 - (correct_population / (len(population_loader) * population_loader.batch_size * args.mc_samples))
+
+    
+
+    # bound evaluation
+    k = torch.sqrt(len(empirical_loader.dataset))
+    # sigma-sub-Gaussian is equivalent to bounded in [0, 2*sigma], the loss function here is clamped in [0, log(1/pmin)]
+    sigma = math.log(1/args.pmin)/2
+    bound_ce = cross_entropy_empirical + k*sigma**2 / (2*len(empirical_loader.dataset)) + 1/k * (kl + torch.log())
 
 
     print(f"***Final results***")
@@ -623,3 +282,173 @@ def compute_certificate(net, empirical_loader, population_loader, folder, kl, ar
         channel_specs = 'nochannel'
 
     torch.save(results_dict, f'{folder}/{args.channel_type.lower()}_{channel_specs}_chan-layer{args.l_0}_mcsamples{args.mc_samples}_results.pth')
+
+def compute_lipschitz_constant(net, loaders, mc_samples, pmin, clamping, device):
+    """
+    Computes the Lipschitz constant of the loss wrt the weights.
+
+    Approximates L_w = sup_{w,z} ||∇_w l(w,z)||_2 by finding the maximum
+    gradient norm over the provided dataset and for multiple Monte Carlo
+    samples of the model weights.
+
+    Parameters
+    ----------
+    net : nn.Module
+        The trained probabilistic neural network.
+    loaders : list of DataLoader
+        The data loaders for the dataset (e.g., test or validation set).
+    mc_samples : int
+        The number of Monte Carlo samples to draw for the weights per data point.
+    pmin : float
+        The minimum probability value for clamping in the loss function.
+    clamping : bool
+        Whether to apply clamping in the loss function.
+    device : str
+        The device to run the computation on ('cuda' or 'cpu').
+
+    Returns
+    -------
+    float
+        The computed Lipschitz constant (maximum gradient norm).
+    """
+    net.eval()  # Set the model to evaluation mode
+    max_grad_norm = 0.0
+
+    # Chain the loaders together to create a single iterator
+    combined_iterator = itertools.chain(*loaders)
+
+    print("Computing Lipschitz constant (L_w)...")
+    # Iterate over batches in the dataset
+    for data_batch, target_batch in tqdm(combined_iterator, desc="Lipschitz computation"):
+        data_batch, target_batch = data_batch.to(device), target_batch.to(device)
+        batch_size = data_batch.size(0)
+
+        # Loop for Monte Carlo samples of the weights
+        for _ in range(mc_samples):
+            # 1. Perform one forward pass for the entire batch.
+            # `sample=True` draws a new set of weights 'w' from the posterior.
+            outputs = net(data_batch, sample=True, clamping=clamping, pmin=pmin)
+
+            # 2. Compute loss for each sample in the batch.
+            per_sample_losses = compute_empirical_risk(outputs, target_batch, pmin, clamping, per_sample=True)
+
+            # 3. Compute per-sample gradients and find the max norm in the batch.
+            for i in range(batch_size):
+                net.zero_grad() # Clear gradients for the next sample's backward pass.
+
+                # We need to retain the graph for all but the last sample in the batch
+                # because they all depend on the same 'outputs' tensor from the forward pass.
+                is_last_sample = (i == batch_size - 1)
+                per_sample_losses[i].backward(retain_graph=not is_last_sample)
+
+                # 4. Collect all parameter gradients into a single flat vector.
+                all_grads = [param.grad.view(-1) for param in net.parameters() if param.grad is not None]
+
+                if not all_grads:
+                    continue
+
+                flat_grads = torch.cat(all_grads)
+                
+                # 5. Compute the L2 norm of the gradient vector.
+                current_norm = torch.linalg.norm(flat_grads).item()
+
+                # 6. Update the overall maximum norm found so far.
+                if current_norm > max_grad_norm:
+                    max_grad_norm = current_norm
+    
+    return max_grad_norm
+
+def compute_lipschitz_constant_efficient(net, loaders, mc_samples, pmin, clamping, device):
+    """
+    Computes the Lipschitz constant efficiently using torch.func.vmap.
+
+    Parameters
+    ----------
+    net : nn.Module
+        The trained probabilistic neural network.
+    loaders : list of DataLoader
+        A list of data loaders to iterate over.
+    mc_samples : int
+        The number of Monte Carlo samples for the weights.
+    pmin : float
+        The minimum probability value for clamping.
+    clamping : bool
+        Whether to apply clamping in the loss function.
+    device : str
+        The device to run the computation on ('cuda' or 'cpu').
+
+    Returns
+    -------
+    float
+        The computed Lipschitz constant (maximum gradient norm).
+    """
+    net.eval()
+    max_grad_norm = 0.0
+
+    # This functional forward pass computes the loss for a single data point
+    # given a fixed set of sampled weights.
+    def compute_loss_functional(sampled_weights, buffers, x_sample, y_sample):
+        # The model's forward needs a batch dimension, so we add it with unsqueeze
+        outputs = torch.func.functional_call(
+            net, 
+            (sampled_weights, buffers), 
+            args=(x_sample.unsqueeze(0),), 
+            kwargs={'sample': False} # We've already sampled the weights!
+        )
+        # We use the per-sample loss function and take the single resulting value
+        loss = compute_empirical_risk(outputs, y_sample.unsqueeze(0), pmin, clamping, per_sample=True)
+        return loss.squeeze()
+
+    # Create a function that computes gradients with respect to the weights
+    grad_fn = torch.func.grad(compute_loss_functional, argnums=0)
+    
+    # Use vmap to vectorize the gradient calculation over the batch dimension
+    # in_dims specifies which arguments to map over:
+    # None for weights/buffers (they are fixed for the batch),
+    # 0 for data/targets (iterate along the first dimension).
+    vmapped_grad_fn = torch.func.vmap(grad_fn, in_dims=(None, None, 0, 0), chunk_size=16)
+
+    combined_iterator = itertools.chain(*loaders)
+    total_batches = sum(len(l) for l in loaders)
+    
+    print("Computing Lipschitz constant efficiently with torch.func...")
+    
+    with tqdm(total=total_batches * mc_samples, desc="Processing") as pbar:
+        for _ in range(mc_samples):
+            # 1. Sample a single set of weights 'w' for the entire network
+            # This is done by replacing the probabilistic layers' parameters
+            # with a single sample from their respective distributions.
+            sampled_weights = {}
+            for name, module in net.named_modules():
+                if isinstance(module, (ProbLinear, ProbConv2d)):
+                    # Get the parameter names for this specific module
+                    weight_name = f"{name}.weight.mu"
+                    bias_name = f"{name}.bias.mu"
+                    # Sample weights and biases and store them
+                    sampled_weights[weight_name] = module.weight.sample()
+                    sampled_weights[bias_name] = module.bias.sample()
+            
+            # Get the model's buffers (e.g., for batch norm, though not present here)
+            buffers = {name: buf for name, buf in net.named_buffers()}
+
+            for data_batch, target_batch in combined_iterator:
+                data_batch, target_batch = data_batch.to(device), target_batch.to(device)
+                
+                # 2. Compute all per-sample gradients in one vectorized call
+                per_sample_grads_dict = vmapped_grad_fn(sampled_weights, buffers, data_batch, target_batch)
+
+                # 3. Calculate the norm for each sample's gradient and find the max
+                # Flatten the gradients for each sample across all parameters
+                flat_grads_per_sample = torch.cat([g.flatten(start_dim=1) for g in per_sample_grads_dict.values()], dim=1) # Shape: (batch_size, num_total_params)
+                
+                # Compute L2 norm for each row (each sample)
+                norms = torch.linalg.norm(flat_grads_per_sample, dim=1)
+                
+                batch_max_norm = torch.max(norms).item()
+                if batch_max_norm > max_grad_norm:
+                    max_grad_norm = batch_max_norm
+                
+                pbar.update(1)
+            
+            # Reset the iterator for the next MC sample
+            combined_iterator = itertools.chain(*loaders)

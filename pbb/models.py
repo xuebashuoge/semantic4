@@ -1347,10 +1347,10 @@ def testNNet(net, test_loader, device='cuda', verbose=True):
     
     return loss_sum/len(test_loader), 1-(correct/(len(test_loader)*test_loader.batch_size))
 
-def compute_empirical_risk(outputs, targets, pmin, clamping=True):
+def compute_empirical_risk(outputs, targets, pmin, clamping=True, per_sample=False):
     # compute negative log likelihood loss and bound it with pmin (if applicable)
     # rescaling by log(1/pmin) if clamping
-    empirical_risk = F.nll_loss(outputs, targets)
+    empirical_risk = F.nll_loss(outputs, targets, reduction='none' if per_sample else 'mean')
     if clamping == True:
         empirical_risk = (1./(np.log(1./pmin))) * empirical_risk
     return empirical_risk
