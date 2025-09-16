@@ -36,9 +36,26 @@ def train_and_certificate(args, train_loader, prior_loader, test_loader, empiric
 
     # learn prior
     print('Learning prior...')
-    prior_folder = f'results/prior/{args.name}_{args.name_data}_{args.model}_sig{args.sigma_prior}_pmin{args.pmin}_{args.prior_dist}_epochpri{args.prior_epochs}_bs{args.batch_size}_lrpri{args.learning_rate_prior}_mompri{args.momentum_prior}_drop{args.dropout_prob}_perc{args.perc_prior}/'
+    prior_folder = f'results/prior/{args.name}_{args.name_data}_{args.model}-{args.layers}_sig{args.sigma_prior}_pmin{args.pmin}_{args.prior_dist}_epochpri{args.prior_epochs}_bs{args.batch_size}_lrpri{args.learning_rate_prior}_mompri{args.momentum_prior}_drop{args.dropout_prob}_perc{args.perc_prior}/'
 
-    net0 = CNNet9l(dropout_prob=args.dropout_prob).to(device)
+
+    if args.model.lower() == 'cnn':
+        if args.name_data.lower() == 'cifar10':
+            # fcn for mnist, cnn for cifar10
+            if args.layers == 9:
+                net0 = CNNet9l(dropout_prob=args.dropout_prob).to(device)
+            elif args.layers == 13:
+                net0 = CNNet13l(dropout_prob=args.dropout_prob).to(device)
+            elif args.layers == 15:
+                net0 = CNNet15l(dropout_prob=args.dropout_prob).to(device)
+            else:
+                raise RuntimeError(f'Wrong number of layers chosen {args.layers}')
+        else:
+            net0 = CNNet4l(dropout_prob=args.dropout_prob).to(device)
+    elif args.model.lower() == 'fcn':
+        net0 = NNet4l(dropout_prob=args.dropout_prob).to(device)
+    else:
+        raise RuntimeError(f'Wrong model chosen {args.model}')
 
     train_prior(net0, prior_loader, test_loader, prior_folder, args, device)
 
@@ -46,11 +63,11 @@ def train_and_certificate(args, train_loader, prior_loader, test_loader, empiric
     print('Training posterior...')
     net = ProbCNNet9lChannel(rho_prior, prior_dist=args.prior_dist, l_0=args.l_0, channel_type=args.channel_type, outage=args.outage, device=device, init_net=net0).to(device)
 
-    posterior_folder = f'results/{args.name}_{args.name_data}_{args.model}_sig{args.sigma_prior}_pmin{args.pmin}_{args.prior_dist}_epoch{args.epochs}_bs{args.batch_size}_lr{args.learning_rate}_mom{args.momentum}_drop{args.dropout_prob}/'
+    posterior_folder = f'results/{args.name}_{args.name_data}_{args.model}-{args.layers}_sig{args.sigma_prior}_pmin{args.pmin}_{args.prior_dist}_epoch{args.epochs}_bs{args.batch_size}_lr{args.learning_rate}_mom{args.momentum}_drop{args.dropout_prob}/'
     kl = train_posterior(net, train_loader, posterior_folder, args, device)
 
     print('Computing certificate...')
-    certificate_folder = f'results/{args.name}_{args.name_data}_{args.model}_sig{args.sigma_prior}_pmin{args.pmin}_{args.prior_dist}_epoch{args.epochs}_bs{args.batch_size}_lr{args.learning_rate}_mom{args.momentum}_drop{args.dropout_prob}/certificate/'
+    certificate_folder = f'results/{args.name}_{args.name_data}_{args.model}-{args.layers}_sig{args.sigma_prior}_pmin{args.pmin}_{args.prior_dist}_epoch{args.epochs}_bs{args.batch_size}_lr{args.learning_rate}_mom{args.momentum}_drop{args.dropout_prob}/certificate/'
 
     # compute empirical and population risks
     compute_certificate(net, empirical_loader, population_loader, certificate_folder, kl, args, device)
