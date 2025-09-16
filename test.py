@@ -18,7 +18,7 @@ from pbb.data import loaddataset, loadbatches
 if __name__ == '__main__':
     # This is the key: a robust, version-agnostic way to select the device.
     if torch.cuda.is_available():
-        device = torch.device("cuda")
+        device = torch.device("cuda:1")
         print("CUDA is available. Using GPU.")
     # Check if MPS is available (for macOS with Apple Silicon)
     # The 'hasattr' check is crucial for compatibility with older PyTorch versions
@@ -50,6 +50,7 @@ if __name__ == '__main__':
         'outage': 0.1,
         'noise_var': 1,
         'batch_size': 250,
+        'lip_bs': 100,
         'perc_train': 1.0,
         'perc_prior': 0.5,
         'prior_epochs': 20,
@@ -63,6 +64,7 @@ if __name__ == '__main__':
         'clamping': True,
         'pmin': 1e-5,
         'num_workers': 8,
+        'chunk_size': 16,    # for efficient Lipschitz constant computation
     }
 
     args = Namespace(**args_dict)
@@ -71,52 +73,13 @@ if __name__ == '__main__':
 
     train, test = loaddataset(args.name_data)
 
-    train_loader, test_loader, valid_loader, _, _, bound_loader = loadbatches(train, test, loader_kargs, args.batch_size, prior=True, perc_train=args.perc_train, perc_prior=args.perc_prior)
+    train_loader, test_loader, valid_loader, _, _, bound_loader, lip_all_loader, lip_test_loader = loadbatches(train, test, loader_kargs, args.batch_size, args.lip_bs, prior=True, perc_train=args.perc_train, perc_prior=args.perc_prior)
 
     args.name = 'prior0.5-train1.0-empirical1.0'
     args.l_0 = 2
     args.outage = 0.1
 
-    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, device=device)
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_test_loader, device=device)
 
-    args.outage = 0.2
-
-    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, device=device)
-
-    args.l_0 = 4
-    args.outage = 0.1
-
-    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, device=device)
-
-    args.outage = 0.2
-
-    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, device=device)
-
-    # args.name = 'prior0.5-train0.5-empirical0.5'
-    # args.l_0 = 2
-    # args.outage = 0.1
-
-    # train_and_certificate(args, train_loader=bound_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=bound_loader, population_loader=test_loader, device=device)
-
-    # args.outage = 0.2
-
-    # train_and_certificate(args, train_loader=bound_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=bound_loader, population_loader=test_loader, device=device)
-
-    # args.l_0 = 4
-    # args.outage = 0.1
-
-    # train_and_certificate(args, train_loader=bound_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=bound_loader, population_loader=test_loader, device=device)
-
-    # args.outage = 0.2
-
-    # train_and_certificate(args, train_loader=bound_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=bound_loader, population_loader=test_loader, device=device)
-
-    # test_exp(learning_rate=0.001, momentum=0.95, epochs=1, prior_epochs=1, l_0=2, outage=0.1, mc_samples=1, device=device)
-
-    # test_exp(learning_rate=0.001, momentum=0.95, epochs=1, prior_epochs=1, l_0=2, outage=0.2, mc_samples=1, device=device)
-
-    # test_exp(learning_rate=0.001, momentum=0.95, epochs=1, prior_epochs=1, l_0=4, outage=0.1, mc_samples=1, device=device)
-
-    # test_exp(learning_rate=0.001, momentum=0.95, epochs=1, prior_epochs=1, l_0=4, outage=0.2, mc_samples=1, device=device)
 
     print('All tests done!')

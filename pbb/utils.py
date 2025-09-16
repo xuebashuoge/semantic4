@@ -30,7 +30,7 @@ def my_exp(args, device='cuda', num_workers=8):
 
 
 
-def train_and_certificate(args, train_loader, prior_loader, test_loader, empirical_loader, population_loader, device='cuda'):
+def train_and_certificate(args, train_loader, prior_loader, test_loader, empirical_loader, population_loader, lip_loader, device='cuda'):
 
     rho_prior = math.log(math.exp(args.sigma_prior)-1.0)
 
@@ -53,7 +53,7 @@ def train_and_certificate(args, train_loader, prior_loader, test_loader, empiric
     certificate_folder = f'results/{args.name}_{args.name_data}_{args.model}_sig{args.sigma_prior}_pmin{args.pmin}_{args.prior_dist}_epoch{args.epochs}_bs{args.batch_size}_lr{args.learning_rate}_mom{args.momentum}_drop{args.dropout_prob}/certificate/'
 
     # compute empirical and population risks
-    compute_certificate(net, empirical_loader, population_loader, certificate_folder, kl, args, device)
+    compute_certificate(net, empirical_loader, population_loader, lip_loader, certificate_folder, kl, args, device)
 
     print('Done!')
 
@@ -212,64 +212,70 @@ def train_posterior(net, train_loader, folder, args, device='cuda'):
     return kl
 
 
-def compute_certificate(net, empirical_loader, population_loader, folder, kl, args, device='cuda'):
+def compute_certificate(net, empirical_loader, population_loader, lip_loader, folder, kl, args, device='cuda'):
 
     os.makedirs(folder, exist_ok=True)
 
     net.eval()
 
+    # # compute empirical risk using mc samples
+    # error_empirical, cross_entropy_empirical = compute_empirical(net, empirical_loader, args, device)
+
+    # # compute population risk
+    # error_population, cross_entropy_population = compute_population(net, population_loader, args, device)
+
     # compute Lipschitz constant L_w
-    L_w = compute_lipschitz_constant_efficient(net, [empirical_loader, population_loader], args.mc_samples, args.pmin, args.clamping, device)
+    L_w = compute_lipschitz_constant_efficient(net, lip_loader, args.mc_samples, args.pmin, args.clamping, args.chunk_size, device)
 
-    # compute empirical risk using mc samples
-    correct_empirical = 0.0
-    cross_entropy_empirical = 0.0
+    # # compute empirical risk using mc samples
+    # correct_empirical = 0.0
+    # cross_entropy_empirical = 0.0
 
-    for data_batch, target_batch in tqdm(empirical_loader):
-        data_batch, target_batch = data_batch.to(device), target_batch.to(device)
+    # for data_batch, target_batch in tqdm(empirical_loader):
+    #     data_batch, target_batch = data_batch.to(device), target_batch.to(device)
 
-        for _ in range(args.mc_samples):
+    #     for _ in range(args.mc_samples):
 
-            outputs = net(data_batch, sample=True, wireless=False, clamping=args.clamping, pmin=args.pmin)
-            loss_ce = compute_empirical_risk(outputs, target_batch, args.pmin, args.clamping)
-            pred = outputs.max(1, keepdim=True)[1]
-            correct_empirical += pred.eq(target_batch.view_as(pred)).sum().item()
-            cross_entropy_empirical += loss_ce.item()
+    #         outputs = net(data_batch, sample=True, wireless=False, clamping=args.clamping, pmin=args.pmin)
+    #         loss_ce = compute_empirical_risk(outputs, target_batch, args.pmin, args.clamping)
+    #         pred = outputs.max(1, keepdim=True)[1]
+    #         correct_empirical += pred.eq(target_batch.view_as(pred)).sum().item()
+    #         cross_entropy_empirical += loss_ce.item()
 
-    cross_entropy_empirical /= (len(empirical_loader) * args.mc_samples)
-    error_empirical = 1.0 - (correct_empirical / (len(empirical_loader) * empirical_loader.batch_size * args.mc_samples))
+    # cross_entropy_empirical /= (len(empirical_loader) * args.mc_samples)
+    # error_empirical = 1.0 - (correct_empirical / (len(empirical_loader) * empirical_loader.batch_size * args.mc_samples))
 
-    # compute population risk
-    correct_population = 0.0
-    cross_entropy_population = 0.0
+    # # compute population risk
+    # correct_population = 0.0
+    # cross_entropy_population = 0.0
 
-    with torch.no_grad():
-        for data, target in tqdm(population_loader):
-            data, target = data.to(device), target.to(device)
+    # with torch.no_grad():
+    #     for data, target in tqdm(population_loader):
+    #         data, target = data.to(device), target.to(device)
 
-            for _ in range(args.mc_samples):
+    #         for _ in range(args.mc_samples):
 
-                outputs = net(data, sample=True, wireless=True, clamping=args.clamping, pmin=args.pmin)
+    #             outputs = net(data, sample=True, wireless=True, clamping=args.clamping, pmin=args.pmin)
 
-                loss_ce = compute_empirical_risk(outputs, target, args.pmin, args.clamping)
-                pred = outputs.max(1, keepdim=True)[1]
-                correct_population += pred.eq(target.view_as(pred)).sum().item()
-                cross_entropy_population += loss_ce.item()
+    #             loss_ce = compute_empirical_risk(outputs, target, args.pmin, args.clamping)
+    #             pred = outputs.max(1, keepdim=True)[1]
+    #             correct_population += pred.eq(target.view_as(pred)).sum().item()
+    #             cross_entropy_population += loss_ce.item()
 
-    cross_entropy_population /= (len(population_loader) * args.mc_samples)
-    error_population = 1.0 - (correct_population / (len(population_loader) * population_loader.batch_size * args.mc_samples))
+    # cross_entropy_population /= (len(population_loader) * args.mc_samples)
+    # error_population = 1.0 - (correct_population / (len(population_loader) * population_loader.batch_size * args.mc_samples))
 
     
 
     # bound evaluation
-    k = torch.sqrt(len(empirical_loader.dataset))
+    k = math.sqrt(len(empirical_loader.dataset))
     # sigma-sub-Gaussian is equivalent to bounded in [0, 2*sigma], the loss function here is clamped in [0, log(1/pmin)]
     sigma = math.log(1/args.pmin)/2
-    bound_ce = cross_entropy_empirical + k*sigma**2 / (2*len(empirical_loader.dataset)) + 1/k * (kl + torch.log())
+    bound_ce = cross_entropy_empirical + k*sigma**2 / (2*len(empirical_loader.dataset)) + 1/k * (kl + math.log(1))
 
 
     print(f"***Final results***")
-    print(f"Dataset: {args.name_data}, Sigma: {args.sigma_prior :.5f}, pmin: {args.pmin :.5f}, Dropout: {args.dropout_prob :.5f}, Perc_train: {args.perc_train :.5f}, Perc_prior: {args.perc_prior :.5f}, L_0: {args.l_0}, Channel: {args.channel_type}, Outage: {args.outage :.5f}, MC samples: {args.mc_samples}, Clamping: {args.clamping}, Empirical error: {error_empirical :.5f}, Empirical CE loss: {cross_entropy_empirical :.5f}, Population error: {error_population :.5f}, Population CE loss: {cross_entropy_population :.5f}, KL: {kl :.5f}")
+    print(f"Dataset: {args.name_data}, Sigma: {args.sigma_prior :.5f}, pmin: {args.pmin :.5f}, Dropout: {args.dropout_prob :.5f}, Perc_train: {args.perc_train :.5f}, Perc_prior: {args.perc_prior :.5f}, L_0: {args.l_0}, Channel: {args.channel_type}, Outage: {args.outage :.5f}, MC samples: {args.mc_samples}, Clamping: {args.clamping}, Empirical error: {error_empirical :.5f}, Empirical CE loss: {cross_entropy_empirical :.5f}, Population error: {error_population :.5f}, Population CE loss: {cross_entropy_population :.5f}, KL: {kl :.5f}, L_w: {L_w :.5f}")
 
     results_dict = {
         'args': args,
@@ -277,7 +283,8 @@ def compute_certificate(net, empirical_loader, population_loader, folder, kl, ar
         'cross_entropy_empirical': cross_entropy_empirical,
         'error_population': error_population,
         'cross_entropy_population': cross_entropy_population,
-        'kl': kl
+        'kl': kl,
+        'L_w': L_w,
     }
 
     if args.channel_type.lower() == 'rayleigh':
@@ -364,7 +371,7 @@ def compute_lipschitz_constant(net, loaders, mc_samples, pmin, clamping, device)
     
     return max_grad_norm
 
-def compute_lipschitz_constant_efficient(net, loaders, mc_samples, pmin, clamping, device):
+def compute_lipschitz_constant_efficient(net, loader, mc_samples, pmin, clamping, chunk_size, device):
     """
     Computes the Lipschitz constant efficiently using torch.func.vmap.
 
@@ -372,8 +379,8 @@ def compute_lipschitz_constant_efficient(net, loaders, mc_samples, pmin, clampin
     ----------
     net : nn.Module
         The trained probabilistic neural network.
-    loaders : list of DataLoader
-        A list of data loaders to iterate over.
+    loader : DataLoader
+        The data loaders to iterate over.
     mc_samples : int
         The number of Monte Carlo samples for the weights.
     pmin : float
@@ -399,7 +406,7 @@ def compute_lipschitz_constant_efficient(net, loaders, mc_samples, pmin, clampin
             net, 
             (sampled_weights, buffers), 
             args=(x_sample.unsqueeze(0),), 
-            kwargs={'sample': False} # We've already sampled the weights!
+            kwargs={'sample': False, 'wireless': True} # We've already sampled the weights!
         )
         # We use the per-sample loss function and take the single resulting value
         loss = compute_empirical_risk(outputs, y_sample.unsqueeze(0), pmin, clamping, per_sample=True)
@@ -412,10 +419,9 @@ def compute_lipschitz_constant_efficient(net, loaders, mc_samples, pmin, clampin
     # in_dims specifies which arguments to map over:
     # None for weights/buffers (they are fixed for the batch),
     # 0 for data/targets (iterate along the first dimension).
-    vmapped_grad_fn = torch.func.vmap(grad_fn, in_dims=(None, None, 0, 0), chunk_size=16)
+    vmapped_grad_fn = torch.func.vmap(grad_fn, in_dims=(None, None, 0, 0), chunk_size=chunk_size)
 
-    combined_iterator = itertools.chain(*loaders)
-    total_batches = sum(len(l) for l in loaders)
+    total_batches = len(loader)
     
     print("Computing Lipschitz constant efficiently with torch.func...")
     
@@ -437,7 +443,7 @@ def compute_lipschitz_constant_efficient(net, loaders, mc_samples, pmin, clampin
             # Get the model's buffers (e.g., for batch norm, though not present here)
             buffers = {name: buf for name, buf in net.named_buffers()}
 
-            for data_batch, target_batch in combined_iterator:
+            for data_batch, target_batch in loader:
                 data_batch, target_batch = data_batch.to(device), target_batch.to(device)
                 
                 # 2. Compute all per-sample gradients in one vectorized call
@@ -453,8 +459,66 @@ def compute_lipschitz_constant_efficient(net, loaders, mc_samples, pmin, clampin
                 batch_max_norm = torch.max(norms).item()
                 if batch_max_norm > max_grad_norm:
                     max_grad_norm = batch_max_norm
+
+                # --- FIX ADDED HERE ---
+                # 1. Explicitly delete the large tensors to free up references.
+                del per_sample_grads_dict, flat_grads_per_sample, norms
+
+                # 2. Tell the backend to empty its cache of unused memory.
+                if device == 'cuda':
+                    torch.cuda.empty_cache()
+                elif device == 'mps':
+                    torch.mps.empty_cache()
+                # ----------------------
                 
                 pbar.update(1)
             
-            # Reset the iterator for the next MC sample
-            combined_iterator = itertools.chain(*loaders)
+    
+    return max_grad_norm
+
+def compute_empirical(net, empirical_loader, args, device='cuda'):
+    net.eval()
+    # compute empirical risk using mc samples
+    correct_empirical = 0.0
+    cross_entropy_empirical = 0.0
+
+    for data_batch, target_batch in tqdm(empirical_loader):
+        data_batch, target_batch = data_batch.to(device), target_batch.to(device)
+
+        for _ in range(args.mc_samples):
+
+            outputs = net(data_batch, sample=True, wireless=False, clamping=args.clamping, pmin=args.pmin)
+            loss_ce = compute_empirical_risk(outputs, target_batch, args.pmin, args.clamping)
+            pred = outputs.max(1, keepdim=True)[1]
+            correct_empirical += pred.eq(target_batch.view_as(pred)).sum().item()
+            cross_entropy_empirical += loss_ce.item()
+
+    cross_entropy_empirical /= (len(empirical_loader) * args.mc_samples)
+    error_empirical = 1.0 - (correct_empirical / (len(empirical_loader) * empirical_loader.batch_size * args.mc_samples))
+
+    return error_empirical, cross_entropy_empirical
+
+def compute_population(net, population_loader, args, device='cuda'):
+    net.eval()
+
+    # compute population risk
+    correct_population = 0.0
+    cross_entropy_population = 0.0
+
+    with torch.no_grad():
+        for data, target in tqdm(population_loader):
+            data, target = data.to(device), target.to(device)
+
+            for _ in range(args.mc_samples):
+
+                outputs = net(data, sample=True, wireless=True, clamping=args.clamping, pmin=args.pmin)
+
+                loss_ce = compute_empirical_risk(outputs, target, args.pmin, args.clamping)
+                pred = outputs.max(1, keepdim=True)[1]
+                correct_population += pred.eq(target.view_as(pred)).sum().item()
+                cross_entropy_population += loss_ce.item()
+
+    cross_entropy_population /= (len(population_loader) * args.mc_samples)
+    error_population = 1.0 - (correct_population / (len(population_loader) * population_loader.batch_size * args.mc_samples))
+
+    return error_population, cross_entropy_population
