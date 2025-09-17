@@ -60,7 +60,7 @@ if __name__ == '__main__':
         'learning_rate': 0.001,
         'momentum': 0.95,
         'dropout_prob': 0.2,
-        'mc_samples': 2,
+        'mc_samples': 10,
         'clamping': True,
         'pmin': 1e-5,
         'num_workers': 8,
@@ -79,7 +79,7 @@ if __name__ == '__main__':
     args.l_0 = 2
     args.outage = 0.1
 
-    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_test_loader, device=device)
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
 
 
     print('All tests done!')

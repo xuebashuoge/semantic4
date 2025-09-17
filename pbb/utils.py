@@ -522,7 +522,7 @@ def compute_lipschitz_constant_direct(net, loader, mc_samples, pmin, clamping, c
         The estimated Lipschitz constant (maximum ratio).
     """
     net.eval()
-    max_ratio = 0.0
+    max_k = 0.0
 
     # Define a function that performs the core calculation for a SINGLE data sample.
     # vmap will then vectorize this across the whole batch.
@@ -563,16 +563,25 @@ def compute_lipschitz_constant_direct(net, loader, mc_samples, pmin, clamping, c
             d_w = torch.linalg.norm(channel_weight - 1.0)
 
         # --- RATIO ---
-        # Avoid division by zero if the channel happens to be identity
-        if d_w > 1e-9:
-            k_sample = torch.abs(loss_with_channel - loss_no_channel) / d_w
-        else:
-            k_sample = 0.0
+        # The condition for the whole batch
+        condition = d_w > 1e-9
+
+        # The value if the condition is True
+        # We use torch.ones_like(d_w) to avoid division by zero for the False cases, 
+        # but their results will be discarded anyway.
+        safe_d_w = torch.where(condition, d_w, torch.ones_like(d_w))
+        value_if_true = torch.abs(loss_with_channel - loss_no_channel) / safe_d_w
+
+        # The value if the condition is False
+        value_if_false = torch.zeros_like(d_w)
+
+        # Select between the two based on the condition
+        k_sample = torch.where(condition, value_if_true, value_if_false)
             
         return k_sample.squeeze()
 
     # Vectorize our single-sample function to run on a full batch.
-    vmapped_k_fn = torch.func.vmap(compute_k_for_sample, in_dims=(None, None, 0, 0), chunk_size=chunk_size)
+    vmapped_k_fn = torch.func.vmap(compute_k_for_sample, in_dims=(None, None, 0, 0), chunk_size=chunk_size, randomness="different")
 
     print("Computing Lipschitz constant with the direct method using torch.func...")
     with tqdm(total=len(loader) * mc_samples, desc="Processing") as pbar:
