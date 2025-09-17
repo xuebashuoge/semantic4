@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from torchvision import datasets, transforms
 from torchvision.utils import make_grid
 from tqdm import tqdm, trange
-from pbb.models import ProbLinear, ProbConv2d, NNet4l, CNNet4l, ProbNNet4l, ProbCNNet4l, ProbCNNet9l, ProbCNNet9lChannel, CNNet9l, CNNet13l, ProbCNNet13l, ProbCNNet15l, CNNet15l, trainNNet, testNNet, Lambda_var, trainPNNet,trainPNNet2, computeRiskCertificates, testPosteriorMean, testStochastic, testEnsemble, compute_empirical_risk
+from pbb.models import ProbLinear, ProbConv2d, WirelessChannel, NNet4l, CNNet4l, ProbNNet4l, ProbCNNet4l, ProbCNNet9l, ProbCNNet9lChannel, CNNet9l, CNNet13l, ProbCNNet13l, ProbCNNet15l, CNNet15l, trainNNet, testNNet, Lambda_var, trainPNNet,trainPNNet2, computeRiskCertificates, testPosteriorMean, testStochastic, testEnsemble, compute_empirical_risk
 from pbb.bounds import PBBobj
 from pbb import data
 from pbb.data import loaddataset, loadbatches
@@ -235,14 +235,15 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
 
     net.eval()
 
-    # # compute empirical risk using mc samples
-    # error_empirical, cross_entropy_empirical = compute_empirical(net, empirical_loader, args, device)
-
-    # # compute population risk
-    # error_population, cross_entropy_population = compute_population(net, population_loader, args, device)
-
     # compute Lipschitz constant L_w
-    L_w = compute_lipschitz_constant_efficient(net, lip_loader, args.mc_samples, args.pmin, args.clamping, args.chunk_size, device)
+    L_w = compute_lipschitz_constant_direct(net, lip_loader, args.mc_samples, args.pmin, args.clamping, args.chunk_size, device)
+
+    # compute empirical risk using mc samples
+    error_empirical, cross_entropy_empirical = compute_empirical(net, empirical_loader, args, device)
+
+    # compute population risk
+    error_population, cross_entropy_population = compute_population(net, population_loader, args, device)
+
 
     # # compute empirical risk using mc samples
     # correct_empirical = 0.0
@@ -492,6 +493,119 @@ def compute_lipschitz_constant_efficient(net, loader, mc_samples, pmin, clamping
             
     
     return max_grad_norm
+
+def compute_lipschitz_constant_direct(net, loader, mc_samples, pmin, clamping, chunk_size, device):
+    """
+    Computes the Lipschitz constant using the direct ratio method, vectorized with torch.func.vmap.
+    K = sup |l(w',z) - l(w,z)| / ||w'^{(l0)} - I||
+
+    Parameters
+    ----------
+    net : nn.Module
+        The trained probabilistic neural network. It must contain the channel layer.
+    loader : DataLoader
+        The data loader to iterate over.
+    mc_samples : int
+        The number of Monte Carlo samples for the weights.
+    pmin : float
+        The minimum probability value for clamping in the loss function.
+    clamping : bool
+        Whether to apply clamping in the loss function.
+    chunk_size : int
+        Chunk size for vmap to manage memory usage.
+    device : str
+        The device to run the computation on ('cuda', 'mps', or 'cpu').
+
+    Returns
+    -------
+    float
+        The estimated Lipschitz constant (maximum ratio).
+    """
+    net.eval()
+    max_ratio = 0.0
+
+    # Define a function that performs the core calculation for a SINGLE data sample.
+    # vmap will then vectorize this across the whole batch.
+    def compute_k_for_sample(sampled_weights, buffers, x_sample, y_sample):
+        # --- NO CHANNEL (w) ---
+        # Forward pass for the ideal network (wireless=False)
+        outputs_no_channel = torch.func.functional_call(
+            net,
+            (sampled_weights, buffers),
+            args=(x_sample.unsqueeze(0),),
+            kwargs={'sample': False, 'wireless': False, 'return_channel_weight': False}
+        )
+        loss_no_channel = compute_empirical_risk(outputs_no_channel, y_sample.unsqueeze(0), pmin, clamping, per_sample=True)
+
+        # --- WITH CHANNEL (w') ---
+        # Forward pass for the network with the channel (wireless=True)
+        outputs_with_channel, channel_params = torch.func.functional_call(
+            net,
+            (sampled_weights, buffers),
+            args=(x_sample.unsqueeze(0),),
+            kwargs={'sample': False, 'wireless': True, 'return_channel_weight': True}
+        )
+        loss_with_channel = compute_empirical_risk(outputs_with_channel, y_sample.unsqueeze(0), pmin, clamping, per_sample=True)
+        
+        # --- DENOMINATOR ||w' - w||_2 ---
+        channel_weight, channel_bias = channel_params
+        
+        # The 'ideal' weight is 1.0 and 'ideal' bias is 0.0
+        # For BEC, channel_bias will be None.
+        if channel_bias is not None:
+            # Rayleigh channel case
+            # Note: .contiguous() can sometimes help vmap performance
+            flat_w_diff = (channel_weight - 1.0).contiguous().view(-1)
+            flat_b_diff = channel_bias.contiguous().view(-1)
+            d_w = torch.linalg.norm(torch.cat((flat_w_diff, flat_b_diff)))
+        else:
+            # BEC channel case
+            d_w = torch.linalg.norm(channel_weight - 1.0)
+
+        # --- RATIO ---
+        # Avoid division by zero if the channel happens to be identity
+        if d_w > 1e-9:
+            k_sample = torch.abs(loss_with_channel - loss_no_channel) / d_w
+        else:
+            k_sample = 0.0
+            
+        return k_sample.squeeze()
+
+    # Vectorize our single-sample function to run on a full batch.
+    vmapped_k_fn = torch.func.vmap(compute_k_for_sample, in_dims=(None, None, 0, 0), chunk_size=chunk_size)
+
+    print("Computing Lipschitz constant with the direct method using torch.func...")
+    with tqdm(total=len(loader) * mc_samples, desc="Processing") as pbar:
+        for _ in range(mc_samples):
+            # 1. Sample one set of Bayesian weights for this MC iteration.
+            sampled_weights = {}
+            for name, module in net.named_modules():
+                if isinstance(module, (ProbLinear, ProbConv2d)):
+                    sampled_weights[f"{name}.weight.mu"] = module.weight.sample()
+                    sampled_weights[f"{name}.bias.mu"] = module.bias.sample()
+            
+            buffers = {name: buf for name, buf in net.named_buffers()}
+
+            for data_batch, target_batch in loader:
+                data_batch, target_batch = data_batch.to(device), target_batch.to(device)
+                
+                # 2. Compute all per-sample k values in one vectorized call
+                k_values_batch = vmapped_k_fn(sampled_weights, buffers, data_batch, target_batch)
+                
+                # 3. Find the max k in the current batch and update the global max
+                batch_max_k = torch.max(k_values_batch).item()
+                if batch_max_k > max_k:
+                    max_k = batch_max_k
+
+                pbar.update(1)
+
+            # Clean up memory after each MC sample
+            del sampled_weights, buffers
+            if device == 'cuda': torch.cuda.empty_cache()
+            elif device == 'mps': torch.mps.empty_cache()
+    
+    return max_k
+
 
 def compute_empirical(net, empirical_loader, args, device='cuda'):
     net.eval()

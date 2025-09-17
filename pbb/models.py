@@ -308,15 +308,17 @@ class WirelessChannel(nn.Module):
         else:
             raise RuntimeError(f'Wrong channel type {channel_type}')
         
-    def forward(self, input, wireless=False):
+    def forward(self, input, wireless=False, return_weight=False):
         if self.channel_type == 'bec':
             weight = self.weight.sample(input.shape) if wireless else torch.ones(input.shape).to(self.device)
             output = weight * input
+
+            return (output, (weight, None)) if return_weight else output
         elif self.channel_type == 'rayleigh':
             weight = self.weight.sample(input.shape) if wireless else torch.ones(1).to(self.device)
             bias = self.bias.sample(input.shape) if wireless else torch.zeros(1).to(self.device)
             output = weight * input + bias
-        return output
+            return (output, (weight, bias)) if return_weight else output
 
 
 class ProbLinear(nn.Module):
@@ -800,50 +802,65 @@ class ProbCNNet9lChannel(nn.Module):
 
 
 
-    def forward(self, x, sample=False, wireless=False, kl=False, clamping=True, pmin=1e-4):
+    def forward(self, x, sample=False, wireless=False, kl=False, clamping=True, pmin=1e-4, return_channel_weight=False):
+        # This will store the (weight, bias) tuple from the channel
+        channel_params = None
+
+        # Helper to simplify the channel call logic
+        def apply_channel(inp):
+            nonlocal channel_params
+            if return_channel_weight:
+                out, params = self.channel(inp, wireless, return_weight=True)
+                channel_params = params
+                return out
+            else:
+                return self.channel(inp, wireless)
+
+
         # conv layers
         if self.l_0 == 0:
-            x = self.channel(x, wireless)
+            x = apply_channel(x)
         x = F.relu(self.conv1(x, sample, kl))
         
         if self.l_0 == 1:
-            x = self.channel(x, wireless)
+            x = apply_channel(x)
         x = F.relu(self.conv2(x, sample, kl))
         x = F.max_pool2d(x, kernel_size=2, stride=2)
         
         if self.l_0 == 2:
-            x = self.channel(x, wireless)
+            x = apply_channel(x)
         x = F.relu(self.conv3(x, sample, kl))
         
         if self.l_0 == 3:
-            x = self.channel(x, wireless)
+            x = apply_channel(x)
         x = F.relu(self.conv4(x, sample, kl))
         x = F.max_pool2d(x, kernel_size=2, stride=2)
 
         if self.l_0 == 4:
-            x = self.channel(x, wireless)
+            x = apply_channel(x)
         x = F.relu(self.conv5(x, sample, kl))
 
         if self.l_0 == 5:
-            x = self.channel(x, wireless)
+            x = apply_channel(x)
         x = F.relu(self.conv6(x, sample, kl))
         x = F.max_pool2d(x, kernel_size=2, stride=2)
         # flatten
         x = x.view(x.size(0), -1)
         # fc layer
         if self.l_0 == 6:
-            x = self.channel(x, wireless)
+            x = apply_channel(x)
         x = F.relu(self.fcl1(x, sample, kl))
 
         if self.l_0 == 7:
-            x = self.channel(x, wireless)
+            x = apply_channel(x)
         x = F.relu(self.fcl2(x, sample, kl))
 
         if self.l_0 == 8:
-            x = self.channel(x, wireless)
+            x = apply_channel(x)
         x = self.fcl3(x, sample, kl)
         x = output_transform(x, clamping, pmin)
-        return x
+        
+        return (x, channel_params) if return_channel_weight else x
 
     def compute_kl(self):
         kl = self.conv1.kl_div + self.conv2.kl_div + self.conv3.kl_div + self.conv4.kl_div + self.conv5.kl_div + self.conv6.kl_div + self.fcl1.kl_div + self.fcl2.kl_div + self.fcl3.kl_div
