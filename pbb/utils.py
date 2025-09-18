@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from torchvision import datasets, transforms
 from torchvision.utils import make_grid
 from tqdm import tqdm, trange
-from pbb.models import ProbLinear, ProbConv2d, WirelessChannel, NNet4l, CNNet4l, ProbNNet4l, ProbCNNet4l, ProbCNNet9l, ProbCNNet9lChannel, CNNet9l, CNNet13l, ProbCNNet13l, ProbCNNet15l, CNNet15l, trainNNet, testNNet, Lambda_var, trainPNNet,trainPNNet2, computeRiskCertificates, testPosteriorMean, testStochastic, testEnsemble, compute_empirical_risk
+from pbb.models import ProbLinear, ProbConv2d, WirelessChannel, NNet4l, CNNet4l, ProbNNet4l, ProbCNNet4l, ProbNNet4lChannel, ProbCNNet4lChannel, ProbCNNet9l, ProbCNNet9lChannel, CNNet9l, CNNet13l, ProbCNNet13l, ProbCNNet15l, CNNet15l, ProbCNNet13lChannel, ProbCNNet15lChannel, trainNNet, testNNet, Lambda_var, trainPNNet,trainPNNet2, computeRiskCertificates, testPosteriorMean, testStochastic, testEnsemble, compute_empirical_risk
 from pbb.bounds import PBBobj
 from pbb import data
 from pbb.data import loaddataset, loadbatches
@@ -36,8 +36,6 @@ def train_and_certificate(args, train_loader, prior_loader, test_loader, empiric
 
     # learn prior
     print('Learning prior...')
-    prior_folder = f'results/prior/{args.name}_{args.name_data}_{args.model}-{args.layers}_sig{args.sigma_prior}_pmin{args.pmin}_{args.prior_dist}_epochpri{args.prior_epochs}_bs{args.batch_size}_lrpri{args.learning_rate_prior}_mompri{args.momentum_prior}_drop{args.dropout_prob}_perc{args.perc_prior}/'
-
 
     if args.model.lower() == 'cnn':
         if args.name_data.lower() == 'cifar10':
@@ -51,17 +49,37 @@ def train_and_certificate(args, train_loader, prior_loader, test_loader, empiric
             else:
                 raise RuntimeError(f'Wrong number of layers chosen {args.layers}')
         else:
+            args.layers = 4
             net0 = CNNet4l(dropout_prob=args.dropout_prob).to(device)
     elif args.model.lower() == 'fcn':
+        args.layers = 4
         net0 = NNet4l(dropout_prob=args.dropout_prob).to(device)
     else:
-        raise RuntimeError(f'Wrong model chosen {args.model}')
+        raise RuntimeError(f'Wrong model chosen {args.model}-{args.layers}')
+    
+    prior_folder = f'results/prior/{args.name}_{args.name_data}_{args.model}-{args.layers}_sig{args.sigma_prior}_pmin{args.pmin}_{args.prior_dist}_epochpri{args.prior_epochs}_bs{args.batch_size}_lrpri{args.learning_rate_prior}_mompri{args.momentum_prior}_drop{args.dropout_prob}_perc{args.perc_prior}/'
 
     train_prior(net0, prior_loader, test_loader, prior_folder, args, device)
 
     # load probabilistic model
     print('Training posterior...')
-    net = ProbCNNet9lChannel(rho_prior, prior_dist=args.prior_dist, l_0=args.l_0, channel_type=args.channel_type, outage=args.outage, device=device, init_net=net0).to(device)
+
+    if args.model.lower() == 'cnn':
+        if args.name_data.lower() == 'cifar10':
+            if args.layers == 9:
+                net = ProbCNNet9lChannel(rho_prior, prior_dist=args.prior_dist, l_0=args.l_0, channel_type=args.channel_type, outage=args.outage, device=device, init_net=net0).to(device)
+            elif args.layers == 13:
+                net = ProbCNNet13lChannel(rho_prior, prior_dist=args.prior_dist, l_0=args.l_0, channel_type=args.channel_type, outage=args.outage, device=device, init_net=net0).to(device)
+            elif args.layers == 15:
+                net = ProbCNNet15lChannel(rho_prior, prior_dist=args.prior_dist, l_0=args.l_0, channel_type=args.channel_type, outage=args.outage, device=device, init_net=net0).to(device)
+            else:
+                raise RuntimeError(f'Wrong number of layers chosen {args.layers}')
+        else:
+            net = ProbCNNet4lChannel(rho_prior, prior_dist=args.prior_dist, l_0=args.l_0, channel_type=args.channel_type, outage=args.outage, device=device, init_net=net0).to(device)
+    elif args.model.lower() == 'fcn':
+        net = ProbNNet4lChannel(rho_prior, prior_dist=args.prior_dist, l_0=args.l_0, channel_type=args.channel_type, outage=args.outage, device=device, init_net=net0).to(device)
+    else:
+        raise RuntimeError(f'Wrong model chosen {args.model}-{args.layers}')
 
     posterior_folder = f'results/{args.name}_{args.name_data}_{args.model}-{args.layers}_sig{args.sigma_prior}_pmin{args.pmin}_{args.prior_dist}_epoch{args.epochs}_bs{args.batch_size}_lr{args.learning_rate}_mom{args.momentum}_drop{args.dropout_prob}/'
     kl = train_posterior(net, train_loader, posterior_folder, args, device)
@@ -494,6 +512,8 @@ def compute_lipschitz_constant_efficient(net, loader, mc_samples, pmin, clamping
     
     return max_grad_norm
 
+import time
+
 def compute_lipschitz_constant_direct(net, loader, mc_samples, pmin, clamping, chunk_size, device):
     """
     Computes the Lipschitz constant using the direct ratio method, vectorized with torch.func.vmap.
@@ -583,17 +603,26 @@ def compute_lipschitz_constant_direct(net, loader, mc_samples, pmin, clamping, c
     # Vectorize our single-sample function to run on a full batch.
     vmapped_k_fn = torch.func.vmap(compute_k_for_sample, in_dims=(None, None, 0, 0), chunk_size=chunk_size, randomness="different")
 
+    # Before the mc_samples loop, get the parameter names once
+    param_names = []
+    for name, module in net.named_modules():
+        if isinstance(module, (ProbLinear, ProbConv2d)):
+            param_names.append(f"{name}.weight.mu")
+            param_names.append(f"{name}.bias.mu")
+
     print("Computing Lipschitz constant with the direct method using torch.func...")
     with tqdm(total=len(loader) * mc_samples, desc="Processing") as pbar:
         for _ in range(mc_samples):
+
             # 1. Sample one set of Bayesian weights for this MC iteration.
-            sampled_weights = {}
+            sampled_weights = dict.fromkeys(param_names) # Pre-allocate
             for name, module in net.named_modules():
                 if isinstance(module, (ProbLinear, ProbConv2d)):
                     sampled_weights[f"{name}.weight.mu"] = module.weight.sample()
                     sampled_weights[f"{name}.bias.mu"] = module.bias.sample()
             
             buffers = {name: buf for name, buf in net.named_buffers()}
+
 
             for data_batch, target_batch in loader:
                 data_batch, target_batch = data_batch.to(device), target_batch.to(device)
@@ -607,11 +636,12 @@ def compute_lipschitz_constant_direct(net, loader, mc_samples, pmin, clamping, c
                     max_k = batch_max_k
 
                 pbar.update(1)
-
+            
             # Clean up memory after each MC sample
             del sampled_weights, buffers
             if device == 'cuda': torch.cuda.empty_cache()
             elif device == 'mps': torch.mps.empty_cache()
+            
     
     return max_k
 

@@ -617,6 +617,57 @@ class CNNet4l(nn.Module):
         output = F.log_softmax(x, dim=1)
         return output
 
+class ProbNNet4lChannel(nn.Module):
+    def __init__(self, rho_prior, prior_dist, l_0=-1, channel_type='bec', outage=0.1, noise_var=1, device='cuda', init_net=None):
+        super().__init__()
+        self.device = device
+        self.l_0 = l_0
+
+        
+        self.channel = WirelessChannel(channel_type, outage, noise_var, device)
+
+        self.l1 = ProbLinear(28*28, 600, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.l1 if init_net else None)
+        self.l2 = ProbLinear(600, 600, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.l2 if init_net else None)
+        self.l3 = ProbLinear(600, 600, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.l3 if init_net else None)
+        self.l4 = ProbLinear(600, 10, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.l4 if init_net else None)
+
+    def forward(self, x, sample=False, wireless=False, kl=False, clamping=True, pmin=1e-4, return_channel_weight=False):
+        # This will store the (weight, bias) tuple from the channel
+        channel_params = None
+
+        # Helper to simplify the channel call logic
+        def apply_channel(inp):
+            nonlocal channel_params
+            if return_channel_weight:
+                out, params = self.channel(inp, wireless, return_weight=True)
+                channel_params = params
+                return out
+            else:
+                return self.channel(inp, wireless)
+            
+        x = x.view(-1, 28*28)
+
+        if self.l_0 == 0:
+            x = apply_channel(x)
+        x = F.relu(self.l1(x, sample))
+
+        if self.l_0 == 1:
+            x = apply_channel(x)
+        x = F.relu(self.l2(x, sample))
+
+        if self.l_0 == 2:
+            x = apply_channel(x)
+        x = F.relu(self.l3(x, sample))
+
+        if self.l_0 == 3:
+            x = apply_channel(x)
+        x = output_transform(self.l4(x, sample), clamping, pmin)
+
+        return (x, channel_params) if return_channel_weight else x
+    
+    def compute_kl(self):
+        kl = self.l1.kl_div + self.l2.kl_div + self.l3.kl_div + self.l4.kl_div
+        return kl
 
 class ProbNNet4l(nn.Module):
     """Implementation of a Probabilistic Neural Network with 4 layers
@@ -643,14 +694,10 @@ class ProbNNet4l(nn.Module):
 
     def __init__(self, rho_prior, prior_dist='gaussian', device='cuda', init_net=None):
         super().__init__()
-        self.l1 = ProbLinear(28*28, 600, rho_prior, prior_dist=prior_dist,
-                             device=device, init_layer=init_net.l1 if init_net else None)
-        self.l2 = ProbLinear(600, 600, rho_prior, prior_dist=prior_dist,
-                             device=device, init_layer=init_net.l2 if init_net else None)
-        self.l3 = ProbLinear(600, 600, rho_prior, prior_dist=prior_dist,
-                             device=device, init_layer=init_net.l3 if init_net else None)
-        self.l4 = ProbLinear(600, 10, rho_prior, prior_dist=prior_dist,
-                             device=device, init_layer=init_net.l4 if init_net else None)
+        self.l1 = ProbLinear(28*28, 600, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.l1 if init_net else None)
+        self.l2 = ProbLinear(600, 600, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.l2 if init_net else None)
+        self.l3 = ProbLinear(600, 600, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.l3 if init_net else None)
+        self.l4 = ProbLinear(600, 10, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.l4 if init_net else None)
 
     def forward(self, x, sample=False, clamping=True, pmin=1e-4):
         x = x.view(-1, 28*28)
@@ -664,6 +711,61 @@ class ProbNNet4l(nn.Module):
         # KL as a sum of the KL for each individual layer
         return self.l1.kl_div + self.l2.kl_div + self.l3.kl_div + self.l4.kl_div
 
+class ProbCNNet4lChannel(nn.Module):
+    def __init__(self, rho_prior, prior_dist, l_0=-1, channel_type='bec', outage=0.1, noise_var=1, device='cuda', init_net=None):
+        super().__init__()
+        self.device = device
+        self.l_0 = l_0
+
+        
+        self.channel = WirelessChannel(channel_type, outage, noise_var, device)
+
+        self.conv1 = ProbConv2d(1, 32, 3, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.conv1 if init_net else None)
+        self.conv2 = ProbConv2d(32, 64, 3, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.conv2 if init_net else None)
+        self.fc1 = ProbLinear(9216, 128, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fc1 if init_net else None)
+        self.fc2 = ProbLinear(128, 10, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fc2 if init_net else None)
+
+    def forward(self, x, sample=False, wireless=False, kl=False, clamping=True, pmin=1e-4, return_channel_weight=False):
+        # This will store the (weight, bias) tuple from the channel
+        channel_params = None
+
+        # Helper to simplify the channel call logic
+        def apply_channel(inp):
+            nonlocal channel_params
+            if return_channel_weight:
+                out, params = self.channel(inp, wireless, return_weight=True)
+                channel_params = params
+                return out
+            else:
+                return self.channel(inp, wireless)
+            
+        # conv layers
+        if self.l_0 == 0:
+            x = apply_channel(x)
+        x = F.relu(self.conv1(x, sample, kl))
+
+        if self.l_0 == 1:
+            x = apply_channel(x)
+        x = F.relu(self.conv2(x, sample, kl))
+        x = F.max_pool2d(x, 2)
+
+        # flatten
+        x = x.view(x.size(0), -1)
+
+        # fc layers
+        if self.l_0 == 2:
+            x = apply_channel(x)
+        x = F.relu(self.fc1(x, sample, kl))
+
+        if self.l_0 == 3:
+            x = apply_channel(x)
+        x = output_transform(self.fc2(x, sample, kl), clamping, pmin)
+
+        return (x, channel_params) if return_channel_weight else x
+
+    def compute_kl(self):
+        kl = self.conv1.kl_div + self.conv2.kl_div + self.fc1.kl_div + self.fc2.kl_div
+        return kl
 
 class ProbCNNet4l(nn.Module):
     """Implementation of a Probabilistic Convolutional Neural Network with 4 layers
@@ -691,14 +793,10 @@ class ProbCNNet4l(nn.Module):
     def __init__(self, rho_prior, prior_dist='gaussian', device='cuda', init_net=None):
         super().__init__()
 
-        self.conv1 = ProbConv2d(
-            1, 32, 3, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.conv1 if init_net else None)
-        self.conv2 = ProbConv2d(
-            32, 64, 3, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.conv2 if init_net else None)
-        self.fc1 = ProbLinear(9216, 128, rho_prior, prior_dist=prior_dist,
-                              device=device, init_layer=init_net.fc1 if init_net else None)
-        self.fc2 = ProbLinear(128, 10, rho_prior, prior_dist=prior_dist,
-                              device=device, init_layer=init_net.fc2 if init_net else None)
+        self.conv1 = ProbConv2d(1, 32, 3, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.conv1 if init_net else None)
+        self.conv2 = ProbConv2d(32, 64, 3, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.conv2 if init_net else None)
+        self.fc1 = ProbLinear(9216, 128, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fc1 if init_net else None)
+        self.fc2 = ProbLinear(128, 10, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fc2 if init_net else None)
 
     def forward(self, x, sample=False, clamping=True, pmin=1e-4):
         # forward pass for the network
@@ -772,12 +870,6 @@ class ProbCNNet9lChannel(nn.Module):
 
     Parameters
     ----------
-    l_0 : int
-        Position to insert the wireless channel. Set to -1 to disable.
-        0: Input, 1: After conv1, 2: After conv2, 3: After pool1,
-        4: After conv3, 5: After conv4, 6: After pool2,
-        7: After conv5, 8: After conv6, 9: After pool3,
-        10: After fcl1, 11: After fcl2, 12: After fcl3 (output).
     channel_type: str, optional
         Type of channel ('bec' or 'rayleigh').
     ... (other parameters for WirelessChannel, Prob layers, etc.)
@@ -1006,6 +1098,111 @@ class CNNet13l(nn.Module):
         x = F.log_softmax(x, dim=1)
         return x
 
+class ProbCNNet13lChannel(nn.Module):
+    def __init__(self, rho_prior, prior_dist, l_0=-1, channel_type='bec', outage=0.1, noise_var=1, device='cuda', init_net=None):
+        super().__init__()
+        self.device = device
+        self.l_0 = l_0
+
+        self.channel = WirelessChannel(channel_type, outage, noise_var, device)
+
+        self.conv1 = ProbConv2d(in_channels=3, out_channels=32, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv1 if init_net else None)
+        self.conv2 = ProbConv2d(in_channels=32, out_channels=64, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv2 if init_net else None)
+        self.conv3 = ProbConv2d(in_channels=64, out_channels=128, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv3 if init_net else None)
+        self.conv4 = ProbConv2d(in_channels=128, out_channels=128, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv4 if init_net else None)
+        self.conv5 = ProbConv2d(in_channels=128, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv5 if init_net else None)
+        self.conv6 = ProbConv2d(in_channels=256, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv6 if init_net else None)
+        self.conv7 = ProbConv2d(in_channels=256, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv7 if init_net else None)
+        self.conv8 = ProbConv2d(in_channels=256, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv8 if init_net else None)
+        self.conv9 = ProbConv2d(in_channels=512, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv9 if init_net else None)
+        self.conv10 = ProbConv2d(in_channels=512, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv10 if init_net else None)
+        self.fcl1 = ProbLinear(2048, 1024, rho_prior=rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fcl1 if init_net else None)
+        self.fcl2 = ProbLinear(1024, 512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fcl2 if init_net else None)
+        self.fcl3 = ProbLinear(512, 10, rho_prior=rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fcl3 if init_net else None)
+
+    def forward(self, x, sample=False, wireless=False, kl=False, clamping=True, pmin=1e-4, return_channel_weight=False):
+        # This will store the (weight, bias) tuple from the channel
+        channel_params = None
+
+        # Helper to simplify the channel call logic
+        def apply_channel(inp):
+            nonlocal channel_params
+            if return_channel_weight:
+                out, params = self.channel(inp, wireless, return_weight=True)
+                channel_params = params
+                return out
+            else:
+                return self.channel(inp, wireless)
+        
+        
+        # conv layers
+        if self.l_0 == 0:
+            x = apply_channel(x)
+        x = F.relu(self.conv1(x, sample, kl))
+        
+        if self.l_0 == 1:
+            x = apply_channel(x)
+        x = F.relu(self.conv2(x, sample, kl))
+        x = F.max_pool2d(x, kernel_size=2, stride=2)
+        
+        if self.l_0 == 2:
+            x = apply_channel(x)
+        x = F.relu(self.conv3(x, sample, kl))
+        
+        if self.l_0 == 3:
+            x = apply_channel(x)
+        x = F.relu(self.conv4(x, sample, kl))
+        x = F.max_pool2d(x, kernel_size=2, stride=2)
+
+        if self.l_0 == 4:
+            x = apply_channel(x)
+        x = F.relu(self.conv5(x, sample, kl))
+
+        if self.l_0 == 5:
+            x = apply_channel(x)
+        x = F.relu(self.conv6(x, sample, kl))
+
+        if self.l_0 == 6:
+            x = apply_channel(x)
+        x = F.relu(self.conv7(x, sample, kl))
+        x = F.max_pool2d(x, kernel_size=2, stride=2)
+
+        if self.l_0 == 7:
+            x = apply_channel(x)
+        x = F.relu(self.conv8(x, sample, kl))
+
+        if self.l_0 == 8:
+            x = apply_channel(x)
+        x = F.relu(self.conv9(x, sample, kl))
+
+        if self.l_0 == 9:
+            x = apply_channel(x)
+        x = F.relu(self.conv10(x, sample, kl))
+        x = F.max_pool2d(x, kernel_size=2, stride=2)
+
+        # flatten
+        x = x.view(x.size(0), -1)
+
+        # fc layer
+        if self.l_0 == 10:
+            x = apply_channel(x)
+        x = F.relu(self.fcl1(x, sample, kl))
+
+        if self.l_0 == 11:
+            x = apply_channel(x)
+        x = F.relu(self.fcl2(x, sample, kl))
+
+        if self.l_0 == 12:
+            x = apply_channel(x)
+        x = self.fcl3(x, sample, kl)
+        x = output_transform(x, clamping, pmin)
+        
+        return (x, channel_params) if return_channel_weight else x
+    
+    def compute_kl(self):
+        kl = self.conv1.kl_div + self.conv2.kl_div + self.conv3.kl_div + self.conv4.kl_div + self.conv5.kl_div + self.conv6.kl_div + self.conv7.kl_div + self.conv8.kl_div + self.conv9.kl_div + self.conv10.kl_div + self.fcl1.kl_div + self.fcl2.kl_div + self.fcl3.kl_div
+        
+        return kl
 
 class ProbCNNet13l(nn.Module):
     """Implementation of a Probabilistic Convolutional Neural Network with 13 layers
@@ -1032,32 +1229,19 @@ class ProbCNNet13l(nn.Module):
 
     def __init__(self, rho_prior, prior_dist, device='cuda', init_net=None):
         super().__init__()
-        self.conv1 = ProbConv2d(in_channels=3, out_channels=32, rho_prior=rho_prior, prior_dist=prior_dist,
-                                device=device, kernel_size=3, padding=1, init_layer=init_net.conv1 if init_net else None)
-        self.conv2 = ProbConv2d(in_channels=32, out_channels=64, rho_prior=rho_prior, prior_dist=prior_dist,
-                                device=device, kernel_size=3, padding=1, init_layer=init_net.conv2 if init_net else None)
-        self.conv3 = ProbConv2d(in_channels=64, out_channels=128, rho_prior=rho_prior, prior_dist=prior_dist,
-                                device=device, kernel_size=3, padding=1, init_layer=init_net.conv3 if init_net else None)
-        self.conv4 = ProbConv2d(in_channels=128, out_channels=128, rho_prior=rho_prior, prior_dist=prior_dist,
-                                device=device, kernel_size=3, padding=1, init_layer=init_net.conv4 if init_net else None)
-        self.conv5 = ProbConv2d(in_channels=128, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist,
-                                device=device, kernel_size=3, padding=1, init_layer=init_net.conv5 if init_net else None)
-        self.conv6 = ProbConv2d(in_channels=256, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist,
-                                device=device, kernel_size=3, padding=1, init_layer=init_net.conv6 if init_net else None)
-        self.conv7 = ProbConv2d(in_channels=256, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist,
-                                device=device, kernel_size=3, padding=1, init_layer=init_net.conv7 if init_net else None)
-        self.conv8 = ProbConv2d(in_channels=256, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist,
-                                device=device, kernel_size=3, padding=1, init_layer=init_net.conv8 if init_net else None)
-        self.conv9 = ProbConv2d(in_channels=512, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist,
-                                device=device, kernel_size=3, padding=1, init_layer=init_net.conv9 if init_net else None)
-        self.conv10 = ProbConv2d(in_channels=512, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist,
-                                 device=device, kernel_size=3, padding=1, init_layer=init_net.conv10 if init_net else None)
-        self.fcl1 = ProbLinear(2048, 1024, rho_prior=rho_prior, prior_dist=prior_dist,
-                               device=device, init_layer=init_net.fcl1 if init_net else None)
-        self.fcl2 = ProbLinear(1024, 512, rho_prior=rho_prior, prior_dist=prior_dist,
-                               device=device, init_layer=init_net.fcl2 if init_net else None)
-        self.fcl3 = ProbLinear(512, 10, rho_prior=rho_prior, prior_dist=prior_dist,
-                               device=device, init_layer=init_net.fcl3 if init_net else None)
+        self.conv1 = ProbConv2d(in_channels=3, out_channels=32, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv1 if init_net else None)
+        self.conv2 = ProbConv2d(in_channels=32, out_channels=64, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv2 if init_net else None)
+        self.conv3 = ProbConv2d(in_channels=64, out_channels=128, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv3 if init_net else None)
+        self.conv4 = ProbConv2d(in_channels=128, out_channels=128, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv4 if init_net else None)
+        self.conv5 = ProbConv2d(in_channels=128, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv5 if init_net else None)
+        self.conv6 = ProbConv2d(in_channels=256, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv6 if init_net else None)
+        self.conv7 = ProbConv2d(in_channels=256, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv7 if init_net else None)
+        self.conv8 = ProbConv2d(in_channels=256, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv8 if init_net else None)
+        self.conv9 = ProbConv2d(in_channels=512, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv9 if init_net else None)
+        self.conv10 = ProbConv2d(in_channels=512, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv10 if init_net else None)
+        self.fcl1 = ProbLinear(2048, 1024, rho_prior=rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fcl1 if init_net else None)
+        self.fcl2 = ProbLinear(1024, 512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fcl2 if init_net else None)
+        self.fcl3 = ProbLinear(512, 10, rho_prior=rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fcl3 if init_net else None)
 
     def forward(self, x, sample=False, clamping=True, pmin=1e-4):
         # conv layers
@@ -1159,6 +1343,123 @@ class CNNet15l(nn.Module):
         x = F.log_softmax(x, dim=1)
         return x
 
+class ProbCNNet15lChannel(nn.Module):
+    def __init__(self, rho_prior, prior_dist, l_0=-1, channel_type='bec', outage=0.1, noise_var=1, device='cuda', init_net=None):
+        super().__init__()
+        self.device = device
+        self.l_0 = l_0
+
+        
+        self.channel = WirelessChannel(channel_type, outage, noise_var, device)
+
+        self.conv1 = ProbConv2d( in_channels=3, out_channels=32, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv1 if init_net else None)
+        self.conv2 = ProbConv2d( in_channels=32, out_channels=64, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv2 if init_net else None)
+        self.conv3 = ProbConv2d( in_channels=64, out_channels=128, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv3 if init_net else None)
+        self.conv4 = ProbConv2d( in_channels=128, out_channels=128, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv4 if init_net else None)
+        self.conv5 = ProbConv2d( in_channels=128, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv5 if init_net else None)
+        self.conv6 = ProbConv2d( in_channels=256, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv6 if init_net else None)
+        self.conv7 = ProbConv2d( in_channels=256, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv7 if init_net else None)
+        self.conv8 = ProbConv2d( in_channels=256, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv8 if init_net else None)
+        self.conv9 = ProbConv2d( in_channels=256, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv9 if init_net else None)
+        self.conv10 = ProbConv2d( in_channels=512, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv10 if init_net else None)
+        self.conv11 = ProbConv2d( in_channels=512, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv11 if init_net else None)
+        self.conv12 = ProbConv2d( in_channels=512, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv12 if init_net else None)
+        self.fcl1 = ProbLinear(2048, 1024, rho_prior=rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fcl1 if init_net else None)
+        self.fcl2 = ProbLinear(1024, 512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fcl2 if init_net else None)
+        self.fcl3 = ProbLinear(512, 10, rho_prior=rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fcl3 if init_net else None)
+
+    def forward(self, x, sample=False, wireless=False, kl=False, clamping=True, pmin=1e-4, return_channel_weight=False):
+        # This will store the (weight, bias) tuple from the channel
+        channel_params = None
+
+        # Helper to simplify the channel call logic
+        def apply_channel(inp):
+            nonlocal channel_params
+            if return_channel_weight:
+                out, params = self.channel(inp, wireless, return_weight=True)
+                channel_params = params
+                return out
+            else:
+                return self.channel(inp, wireless)
+        
+        
+        # conv layers
+        if self.l_0 == 0:
+            x = apply_channel(x)
+        x = F.relu(self.conv1(x, sample, kl))
+        
+        if self.l_0 == 1:
+            x = apply_channel(x)
+        x = F.relu(self.conv2(x, sample, kl))
+        x = F.max_pool2d(x, kernel_size=2, stride=2)
+        
+        if self.l_0 == 2:
+            x = apply_channel(x)
+        x = F.relu(self.conv3(x, sample, kl))
+        
+        if self.l_0 == 3:
+            x = apply_channel(x)
+        x = F.relu(self.conv4(x, sample, kl))
+        x = F.max_pool2d(x, kernel_size=2, stride=2)
+
+        if self.l_0 == 4:
+            x = apply_channel(x)
+        x = F.relu(self.conv5(x, sample, kl))
+
+        if self.l_0 == 5:
+            x = apply_channel(x)
+        x = F.relu(self.conv6(x, sample, kl))
+
+        if self.l_0 == 6:
+            x = apply_channel(x)
+        x = F.relu(self.conv7(x, sample, kl))
+
+        if self.l_0 == 7:
+            x = apply_channel(x)
+        x = F.relu(self.conv8(x, sample, kl))
+        x = F.max_pool2d(x, kernel_size=2, stride=2)
+
+        if self.l_0 == 8:
+            x = apply_channel(x)
+        x = F.relu(self.conv9(x, sample, kl))
+
+        if self.l_0 == 9:
+            x = apply_channel(x)
+        x = F.relu(self.conv10(x, sample, kl))
+
+        if self.l_0 == 10:
+            x = apply_channel(x)
+        x = F.relu(self.conv11(x, sample, kl))
+
+        if self.l_0 == 11:
+            x = apply_channel(x)
+        x = F.relu(self.conv12(x, sample, kl))
+        x = F.max_pool2d(x, kernel_size=2, stride=2)
+
+        # flatten
+        x = x.view(x.size(0), -1)
+
+        # fc layer
+        if self.l_0 == 12:
+            x = apply_channel(x)
+        x = F.relu(self.fcl1(x, sample, kl))
+        
+        if self.l_0 == 13:
+            x = apply_channel(x)
+        x = F.relu(self.fcl2(x, sample, kl))
+
+        if self.l_0 == 14:
+            x = apply_channel(x)
+        x = self.fcl3(x, sample, kl)
+        x = output_transform(x, clamping, pmin)
+
+        return (x, channel_params) if return_channel_weight else x
+    
+    def compute_kl(self):
+        # KL as a sum of the KL for each individual layer
+        kl = self.conv1.kl_div + self.conv2.kl_div + self.conv3.kl_div + self.conv4.kl_div + self.conv5.kl_div + self.conv6.kl_div + self.conv7.kl_div + self.conv8.kl_div + self.conv9.kl_div + self.conv10.kl_div + self.conv11.kl_div + self.conv12.kl_div + self.fcl1.kl_div + self.fcl2.kl_div + self.fcl3.kl_div
+        return kl
+
 
 class ProbCNNet15l(nn.Module):
     """Implementation of a Probabilistic Convolutional Neural Network with 15 layers
@@ -1186,48 +1487,21 @@ class ProbCNNet15l(nn.Module):
     def __init__(self, rho_prior, prior_dist, device='cuda', init_net=None):
         super().__init__()
         # TODO
-        self.conv1 = ProbConv2d(
-            in_channels=3, out_channels=32, rho_prior=rho_prior, prior_dist=prior_dist, device=device,
-            kernel_size=3, padding=1, init_layer=init_net.conv1 if init_net else None)
-        self.conv2 = ProbConv2d(
-            in_channels=32, out_channels=64, rho_prior=rho_prior, prior_dist=prior_dist, device=device,
-            kernel_size=3, padding=1, init_layer=init_net.conv2 if init_net else None)
-        self.conv3 = ProbConv2d(
-            in_channels=64, out_channels=128, rho_prior=rho_prior, prior_dist=prior_dist, device=device,
-            kernel_size=3, padding=1, init_layer=init_net.conv3 if init_net else None)
-        self.conv4 = ProbConv2d(
-            in_channels=128, out_channels=128, rho_prior=rho_prior, prior_dist=prior_dist, device=device,
-            kernel_size=3, padding=1, init_layer=init_net.conv4 if init_net else None)
-        self.conv5 = ProbConv2d(
-            in_channels=128, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device,
-            kernel_size=3, padding=1, init_layer=init_net.conv5 if init_net else None)
-        self.conv6 = ProbConv2d(
-            in_channels=256, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device,
-            kernel_size=3, padding=1, init_layer=init_net.conv6 if init_net else None)
-        self.conv7 = ProbConv2d(
-            in_channels=256, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device,
-            kernel_size=3, padding=1, init_layer=init_net.conv7 if init_net else None)
-        self.conv8 = ProbConv2d(
-            in_channels=256, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device,
-            kernel_size=3, padding=1, init_layer=init_net.conv8 if init_net else None)
-        self.conv9 = ProbConv2d(
-            in_channels=256, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device,
-            kernel_size=3, padding=1, init_layer=init_net.conv9 if init_net else None)
-        self.conv10 = ProbConv2d(
-            in_channels=512, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device,
-            kernel_size=3, padding=1, init_layer=init_net.conv10 if init_net else None)
-        self.conv11 = ProbConv2d(
-            in_channels=512, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device,
-            kernel_size=3, padding=1, init_layer=init_net.conv11 if init_net else None)
-        self.conv12 = ProbConv2d(
-            in_channels=512, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device,
-            kernel_size=3, padding=1, init_layer=init_net.conv12 if init_net else None)
-        self.fcl1 = ProbLinear(2048, 1024, rho_prior=rho_prior,
-                               prior_dist=prior_dist, device=device, init_layer=init_net.fcl1 if init_net else None)
-        self.fcl2 = ProbLinear(1024, 512, rho_prior=rho_prior,
-                               prior_dist=prior_dist, device=device, init_layer=init_net.fcl2 if init_net else None)
-        self.fcl3 = ProbLinear(
-            512, 10, rho_prior=rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fcl3 if init_net else None)
+        self.conv1 = ProbConv2d( in_channels=3, out_channels=32, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv1 if init_net else None)
+        self.conv2 = ProbConv2d( in_channels=32, out_channels=64, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv2 if init_net else None)
+        self.conv3 = ProbConv2d( in_channels=64, out_channels=128, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv3 if init_net else None)
+        self.conv4 = ProbConv2d( in_channels=128, out_channels=128, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv4 if init_net else None)
+        self.conv5 = ProbConv2d( in_channels=128, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv5 if init_net else None)
+        self.conv6 = ProbConv2d( in_channels=256, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv6 if init_net else None)
+        self.conv7 = ProbConv2d( in_channels=256, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv7 if init_net else None)
+        self.conv8 = ProbConv2d( in_channels=256, out_channels=256, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv8 if init_net else None)
+        self.conv9 = ProbConv2d( in_channels=256, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv9 if init_net else None)
+        self.conv10 = ProbConv2d( in_channels=512, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv10 if init_net else None)
+        self.conv11 = ProbConv2d( in_channels=512, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv11 if init_net else None)
+        self.conv12 = ProbConv2d( in_channels=512, out_channels=512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv12 if init_net else None)
+        self.fcl1 = ProbLinear(2048, 1024, rho_prior=rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fcl1 if init_net else None)
+        self.fcl2 = ProbLinear(1024, 512, rho_prior=rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fcl2 if init_net else None)
+        self.fcl3 = ProbLinear(512, 10, rho_prior=rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.fcl3 if init_net else None)
 
     def forward(self, x, sample=False, clamping=True, pmin=1e-4):
         # conv layers
@@ -1258,11 +1532,8 @@ class ProbCNNet15l(nn.Module):
 
     def compute_kl(self):
         # KL as a sum of the KL for each individual layer
-        return self.conv1.kl_div + self.conv2.kl_div + self.conv3.kl_div + self.conv4.kl_div + self.conv5.kl_div
-        + self.conv6.kl_div + self.conv7.kl_div + \
-            self.conv8.kl_div + self.conv9.kl_div + self.conv10.kl_div
-        + self.conv11.kl_div + self.conv12.kl_div + \
-            self.fcl1.kl_div + self.fcl2.kl_div + self.fcl3.kl_div
+        kl = self.conv1.kl_div + self.conv2.kl_div + self.conv3.kl_div + self.conv4.kl_div + self.conv5.kl_div + self.conv6.kl_div + self.conv7.kl_div + self.conv8.kl_div + self.conv9.kl_div + self.conv10.kl_div + self.conv11.kl_div + self.conv12.kl_div + self.fcl1.kl_div + self.fcl2.kl_div + self.fcl3.kl_div
+        return kl
 
 
 def output_transform(x, clamping=True, pmin=1e-4):

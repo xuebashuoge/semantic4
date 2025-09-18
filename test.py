@@ -40,7 +40,7 @@ if __name__ == '__main__':
 
     args_dict = {
         'name': 'myexp',
-        'name_data': 'cifar10',
+        'name_data': 'mnist',
         'model': 'cnn',
         'layers': 9,
         'prior_dist': 'gaussian',
@@ -60,7 +60,7 @@ if __name__ == '__main__':
         'learning_rate': 0.001,
         'momentum': 0.95,
         'dropout_prob': 0.2,
-        'mc_samples': 10,
+        'mc_samples': 200,
         'clamping': True,
         'pmin': 1e-5,
         'num_workers': 8,
@@ -78,6 +78,60 @@ if __name__ == '__main__':
     args.name = 'prior0.5-train1.0-empirical1.0'
     args.l_0 = 2
     args.outage = 0.1
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    args.name = 'prior0.5-train1.0-empirical1.0'
+    args.l_0 = 2
+    args.outage = 0.2
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    args.name = 'prior0.5-train1.0-empirical1.0'
+    args.model = 'fcn'
+    args.l_0 = 2
+    args.outage = 0.1
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    args.name = 'prior0.5-train1.0-empirical1.0'
+    args.model = 'fcn'
+    args.l_0 = 2
+    args.outage = 0.2
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    # cifar10
+    args.name_data = 'cifar10'
+    args.model = 'cnn'
+    args.layers = 9
+
+    train, test = loaddataset(args.name_data)
+
+    train_loader, test_loader, valid_loader, _, _, bound_loader, lip_all_loader, lip_test_loader = loadbatches(train, test, loader_kargs, args.batch_size, args.lip_bs, prior=True, perc_train=args.perc_train, perc_prior=args.perc_prior)
+
+    args.name = 'prior0.5-train1.0-empirical1.0'
+    args.l_0 = 2
+    args.outage = 0.1
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    args.name = 'prior0.5-train1.0-empirical1.0'
+    args.l_0 = 2
+    args.outage = 0.2
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    args.name = 'prior0.5-train1.0-empirical1.0'
+    args.model = 'fcn'
+    args.l_0 = 2
+    args.outage = 0.1
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    args.name = 'prior0.5-train1.0-empirical1.0'
+    args.model = 'fcn'
+    args.l_0 = 2
+    args.outage = 0.2
 
     train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
 
