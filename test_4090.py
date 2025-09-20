@@ -107,26 +107,52 @@ if __name__ == '__main__':
 
     train_loader, test_loader, valid_loader, _, _, bound_loader, lip_all_loader, lip_test_loader = loadbatches(train, test, loader_kargs, args.batch_size, args.lip_bs, prior=True, perc_train=args.perc_train, perc_prior=args.perc_prior)
 
-    args.l_0 = 2
     args.outage = 0.1
     args.l_0 = 4
 
     train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
 
-    args.l_0 = 2
     args.outage = 0.2
     args.l_0 = 4
 
     train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
 
-    args.model = 'fcn'
-    args.l_0 = 1
+    args.layers = 13
+    args.l_0 = 2
     args.outage = 0.1
 
     train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
 
-    args.model = 'fcn'
-    args.l_0 = 1
+    args.outage = 0.2
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    args.layers = 15
+    args.l_0 = 2
+    args.outage = 0.1
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    args.outage = 0.2
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    args.layers = 13
+    args.l_0 = 4
+    args.outage = 0.1
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    args.outage = 0.2
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    args.layers = 15
+    args.l_0 = 4
+    args.outage = 0.1
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
     args.outage = 0.2
 
     train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)

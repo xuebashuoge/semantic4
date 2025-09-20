@@ -250,58 +250,48 @@ def train_posterior(net, train_loader, folder, args, device='cuda'):
 def compute_certificate(net, empirical_loader, population_loader, lip_loader, folder, kl, args, device='cuda'):
 
     os.makedirs(folder, exist_ok=True)
-
-    net.eval()
-
-    # compute Lipschitz constant L_w
-    L_w = compute_lipschitz_constant_direct(net, lip_loader, args.mc_samples, args.pmin, args.clamping, args.chunk_size, device)
-
-    # compute empirical risk using mc samples
-    error_empirical, cross_entropy_empirical = compute_empirical(net, empirical_loader, args, device)
-
-    # compute population risk
-    error_population, cross_entropy_population = compute_population(net, population_loader, args, device)
-
-
-    # # compute empirical risk using mc samples
-    # correct_empirical = 0.0
-    # cross_entropy_empirical = 0.0
-
-    # for data_batch, target_batch in tqdm(empirical_loader):
-    #     data_batch, target_batch = data_batch.to(device), target_batch.to(device)
-
-    #     for _ in range(args.mc_samples):
-
-    #         outputs = net(data_batch, sample=True, wireless=False, clamping=args.clamping, pmin=args.pmin)
-    #         loss_ce = compute_empirical_risk(outputs, target_batch, args.pmin, args.clamping)
-    #         pred = outputs.max(1, keepdim=True)[1]
-    #         correct_empirical += pred.eq(target_batch.view_as(pred)).sum().item()
-    #         cross_entropy_empirical += loss_ce.item()
-
-    # cross_entropy_empirical /= (len(empirical_loader) * args.mc_samples)
-    # error_empirical = 1.0 - (correct_empirical / (len(empirical_loader) * empirical_loader.batch_size * args.mc_samples))
-
-    # # compute population risk
-    # correct_population = 0.0
-    # cross_entropy_population = 0.0
-
-    # with torch.no_grad():
-    #     for data, target in tqdm(population_loader):
-    #         data, target = data.to(device), target.to(device)
-
-    #         for _ in range(args.mc_samples):
-
-    #             outputs = net(data, sample=True, wireless=True, clamping=args.clamping, pmin=args.pmin)
-
-    #             loss_ce = compute_empirical_risk(outputs, target, args.pmin, args.clamping)
-    #             pred = outputs.max(1, keepdim=True)[1]
-    #             correct_population += pred.eq(target.view_as(pred)).sum().item()
-    #             cross_entropy_population += loss_ce.item()
-
-    # cross_entropy_population /= (len(population_loader) * args.mc_samples)
-    # error_population = 1.0 - (correct_population / (len(population_loader) * population_loader.batch_size * args.mc_samples))
-
+    if args.channel_type.lower() == 'rayleigh':
+        channel_specs = f'noise{args.noise_var}'
+    elif args.channel_type.lower() == 'bec':
+        channel_specs = f'outage{args.outage}'
+    else:
+        channel_specs = 'nochannel'
+    certificate_file = f"{folder}/{args.channel_type.lower()}_{channel_specs}_chan-layer{args.l_0}_mcsamples{args.mc_samples}_results.pth"
     
+    if os.path.exists(certificate_file):
+        try:
+            results_dict = torch.load(certificate_file, weights_only=False, map_location=device)
+        except TypeError:
+            results_dict = torch.load(certificate_file, map_location=device)
+        error_empirical = results_dict['error_empirical']
+        cross_entropy_empirical = results_dict['cross_entropy_empirical']
+        error_population = results_dict['error_population']
+        cross_entropy_population = results_dict['cross_entropy_population']
+        L_w = results_dict['L_w']
+
+    else:
+        net.eval()
+
+        # compute Lipschitz constant L_w
+        L_w = compute_lipschitz_constant_direct(net, lip_loader, args.mc_samples, args.pmin, args.clamping, args.chunk_size, device)
+
+        # compute empirical risk using mc samples
+        error_empirical, cross_entropy_empirical = compute_empirical(net, empirical_loader, args, device)
+
+        # compute population risk
+        error_population, cross_entropy_population = compute_population(net, population_loader, args, device)
+
+        results_dict = {
+            'args': args,
+            'error_empirical': error_empirical,
+            'cross_entropy_empirical': cross_entropy_empirical,
+            'error_population': error_population,
+            'cross_entropy_population': cross_entropy_population,
+            'kl': kl,
+            'L_w': L_w,
+        }
+        torch.save(results_dict, certificate_file)
+
 
     # bound evaluation
     k = math.sqrt(len(empirical_loader.dataset))
@@ -313,24 +303,7 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
     print(f"***Final results***")
     print(f"Dataset: {args.name_data}, Sigma: {args.sigma_prior :.5f}, pmin: {args.pmin :.5f}, Dropout: {args.dropout_prob :.5f}, Perc_train: {args.perc_train :.5f}, Perc_prior: {args.perc_prior :.5f}, L_0: {args.l_0}, Channel: {args.channel_type}, Outage: {args.outage :.5f}, MC samples: {args.mc_samples}, Clamping: {args.clamping}, Empirical error: {error_empirical :.5f}, Empirical CE loss: {cross_entropy_empirical :.5f}, Population error: {error_population :.5f}, Population CE loss: {cross_entropy_population :.5f}, KL: {kl :.5f}, L_w: {L_w :.5f}")
 
-    results_dict = {
-        'args': args,
-        'error_empirical': error_empirical,
-        'cross_entropy_empirical': cross_entropy_empirical,
-        'error_population': error_population,
-        'cross_entropy_population': cross_entropy_population,
-        'kl': kl,
-        'L_w': L_w,
-    }
-
-    if args.channel_type.lower() == 'rayleigh':
-        channel_specs = f'noise{args.noise_var}'
-    elif args.channel_type.lower() == 'bec':
-        channel_specs = f'outage{args.outage}'
-    else:
-        channel_specs = 'nochannel'
-
-    torch.save(results_dict, f'{folder}/{args.channel_type.lower()}_{channel_specs}_chan-layer{args.l_0}_mcsamples{args.mc_samples}_results.pth')
+    
 
 def compute_lipschitz_constant(net, loaders, mc_samples, pmin, clamping, device):
     """
