@@ -121,19 +121,5 @@ if __name__ == '__main__':
 
     train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
 
-    args.name = 'prior0.5-train1.0-empirical1.0'
-    args.model = 'fcn'
-    args.l_0 = 2
-    args.outage = 0.1
-
-    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
-
-    args.name = 'prior0.5-train1.0-empirical1.0'
-    args.model = 'fcn'
-    args.l_0 = 2
-    args.outage = 0.2
-
-    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
-
 
     print('All tests done!')
