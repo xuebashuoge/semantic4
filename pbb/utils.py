@@ -257,18 +257,40 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
     else:
         channel_specs = 'nochannel'
     certificate_file = f"{folder}/{args.channel_type.lower()}_{channel_specs}_chan-layer{args.l_0}_mcsamples{args.mc_samples}_results.pth"
+
+    save_new = False
     
     if os.path.exists(certificate_file):
         try:
             results_dict = torch.load(certificate_file, weights_only=False, map_location=device)
         except TypeError:
             results_dict = torch.load(certificate_file, map_location=device)
-        error_empirical = results_dict['error_empirical']
-        cross_entropy_empirical = results_dict['cross_entropy_empirical']
-        error_population = results_dict['error_population']
-        cross_entropy_population = results_dict['cross_entropy_population']
-        L_w = results_dict['L_w']
 
+        try:
+            error_empirical = results_dict['error_empirical']
+            cross_entropy_empirical = results_dict['cross_entropy_empirical']
+        except KeyError:
+            # compute empirical risk using mc samples
+            error_empirical, cross_entropy_empirical = compute_empirical(net, empirical_loader, args, device)
+            results_dict['error_empirical'] = error_empirical
+            results_dict['cross_entropy_empirical'] = cross_entropy_empirical
+            save_new = True 
+        try:
+            error_population = results_dict['error_population']
+            cross_entropy_population = results_dict['cross_entropy_population']
+        except KeyError:
+            # compute population risk
+            error_population, cross_entropy_population = compute_population(net, population_loader, args, device)
+            results_dict['error_population'] = error_population
+            results_dict['cross_entropy_population'] = cross_entropy_population
+            save_new = True 
+        try:
+            L_w = results_dict['L_w']
+        except KeyError:
+            # compute Lipschitz constant L_w
+            L_w = compute_lipschitz_constant_direct(net, lip_loader, args.mc_samples, args.pmin, args.clamping, args.chunk_size, device)
+            results_dict['L_w'] = L_w
+            save_new = True 
     else:
         net.eval()
 
@@ -290,8 +312,10 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
             'kl': kl,
             'L_w': L_w,
         }
-        torch.save(results_dict, certificate_file)
+        save_new = True
 
+    if save_new:
+        torch.save(results_dict, certificate_file)
 
     # bound evaluation
     k = math.sqrt(len(empirical_loader.dataset))
