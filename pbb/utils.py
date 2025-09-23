@@ -315,16 +315,19 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
         }
         save_new = True
 
-    # test
-    net.dimension = 10
-
+    try:
+        dimension = results_dict['dimension']
+        save_new = True
+    except KeyError:
+        dimension = net.dimension
+    
     # forward process for computing dimension
-    if net.dimension == 0:
+    if dimension == 0:
         with torch.no_grad():
-            data_batch, _ = population_loader.sample()
+            data_batch, _ = next(iter(population_loader))
             data_batch = data_batch.to(device)
             _ = net(data_batch, sample=False, wireless=True)
-        results_dict['dimension'] = net.dimension
+        results_dict['dimension'] = dimension = net.dimension
         save_new = True
     
     if save_new:
