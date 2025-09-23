@@ -622,6 +622,7 @@ class ProbNNet4lChannel(nn.Module):
         super().__init__()
         self.device = device
         self.l_0 = l_0
+        self.dimension = 0
 
         
         self.channel = WirelessChannel(channel_type, outage, noise_var, device)
@@ -638,6 +639,8 @@ class ProbNNet4lChannel(nn.Module):
         # Helper to simplify the channel call logic
         def apply_channel(inp):
             nonlocal channel_params
+            self.dimension = inp.numel()/inp.shape[0]
+            self.dimension = 2
             if return_channel_weight:
                 out, params = self.channel(inp, wireless, return_weight=True)
                 channel_params = params
@@ -716,6 +719,7 @@ class ProbCNNet4lChannel(nn.Module):
         super().__init__()
         self.device = device
         self.l_0 = l_0
+        self.dimension = 0
 
         
         self.channel = WirelessChannel(channel_type, outage, noise_var, device)
@@ -732,6 +736,7 @@ class ProbCNNet4lChannel(nn.Module):
         # Helper to simplify the channel call logic
         def apply_channel(inp):
             nonlocal channel_params
+            self.dimension = inp.numel()/inp.shape[0]
             if return_channel_weight:
                 out, params = self.channel(inp, wireless, return_weight=True)
                 channel_params = params
@@ -878,6 +883,7 @@ class ProbCNNet9lChannel(nn.Module):
         super().__init__()
         self.device = device
         self.l_0 = l_0
+        self.dimension = 0
 
         
         self.channel = WirelessChannel(channel_type, outage, noise_var, device)
@@ -901,6 +907,7 @@ class ProbCNNet9lChannel(nn.Module):
         # Helper to simplify the channel call logic
         def apply_channel(inp):
             nonlocal channel_params
+            self.dimension = inp.numel()/inp.shape[0]
             if return_channel_weight:
                 out, params = self.channel(inp, wireless, return_weight=True)
                 channel_params = params
@@ -1103,6 +1110,7 @@ class ProbCNNet13lChannel(nn.Module):
         super().__init__()
         self.device = device
         self.l_0 = l_0
+        self.dimension = 0
 
         self.channel = WirelessChannel(channel_type, outage, noise_var, device)
 
@@ -1127,6 +1135,7 @@ class ProbCNNet13lChannel(nn.Module):
         # Helper to simplify the channel call logic
         def apply_channel(inp):
             nonlocal channel_params
+            self.dimension = inp.numel()/inp.shape[0]
             if return_channel_weight:
                 out, params = self.channel(inp, wireless, return_weight=True)
                 channel_params = params
@@ -1348,6 +1357,7 @@ class ProbCNNet15lChannel(nn.Module):
         super().__init__()
         self.device = device
         self.l_0 = l_0
+        self.dimension = 0
 
         
         self.channel = WirelessChannel(channel_type, outage, noise_var, device)
@@ -1375,6 +1385,7 @@ class ProbCNNet15lChannel(nn.Module):
         # Helper to simplify the channel call logic
         def apply_channel(inp):
             nonlocal channel_params
+            self.dimension = inp.numel()/inp.shape[0]
             if return_channel_weight:
                 out, params = self.channel(inp, wireless, return_weight=True)
                 channel_params = params

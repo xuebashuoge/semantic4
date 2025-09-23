@@ -9,6 +9,7 @@ import torch.optim as optim
 import torch.distributions as td
 import matplotlib.pyplot as plt
 
+from scipy.stats import binom
 from torchvision import datasets, transforms
 from torchvision.utils import make_grid
 from tqdm import tqdm, trange
@@ -314,15 +315,38 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
         }
         save_new = True
 
+    # test
+    net.dimension = 10
+
+    # forward process for computing dimension
+    if net.dimension == 0:
+        with torch.no_grad():
+            data_batch, _ = population_loader.sample()
+            data_batch = data_batch.to(device)
+            _ = net(data_batch, sample=False, wireless=True)
+        results_dict['dimension'] = net.dimension
+        save_new = True
+    
     if save_new:
         torch.save(results_dict, certificate_file)
 
+    
     # bound evaluation
-    k = math.sqrt(len(empirical_loader.dataset))
     # sigma-sub-Gaussian is equivalent to bounded in [0, 2*sigma], the loss function here is clamped in [0, log(1/pmin)]
     sigma = math.log(1/args.pmin)/2
-    bound_ce = cross_entropy_empirical + k*sigma**2 / (2*len(empirical_loader.dataset)) + 1/k * (kl + math.log(1))
+    k = math.sqrt(len(empirical_loader.dataset))
+    dimension = net.dimension
+    bound_ce = cross_entropy_empirical + k*sigma**2 / (2*len(empirical_loader.dataset)) + 1/k * (kl - math.log(args.delta))
 
+    if args.channel_type.lower() == 'bec':
+        if args.norm_type.lower() == 'frob':
+            dimension_list = np.arange(0, dimension+1)
+
+            binom_coeffs = binom.pmf(dimension_list, n=dimension, p=args.outage)
+
+            log_term = 1/k * math.log(np.sum(binom_coeffs * np.exp(k * L_w * np.sqrt(dimension_list))))
+
+    bound_ce += log_term
 
     print(f"***Final results***")
     print(f"Dataset: {args.name_data}, Sigma: {args.sigma_prior :.5f}, pmin: {args.pmin :.5f}, Dropout: {args.dropout_prob :.5f}, Perc_train: {args.perc_train :.5f}, Perc_prior: {args.perc_prior :.5f}, L_0: {args.l_0}, Channel: {args.channel_type}, Outage: {args.outage :.5f}, MC samples: {args.mc_samples}, Clamping: {args.clamping}, Empirical error: {error_empirical :.5f}, Empirical CE loss: {cross_entropy_empirical :.5f}, Population error: {error_population :.5f}, Population CE loss: {cross_entropy_population :.5f}, KL: {kl :.5f}, L_w: {L_w :.5f}")
