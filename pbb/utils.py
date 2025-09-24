@@ -702,6 +702,9 @@ def compute_empirical(net, empirical_loader, args, device='cuda'):
     cross_entropy_empirical /= (len(empirical_loader) * args.mc_samples)
     error_empirical = 1.0 - (correct_empirical / (len(empirical_loader) * empirical_loader.batch_size * args.mc_samples))
 
+    if device == 'cuda': torch.cuda.empty_cache()
+    elif device == 'mps': torch.mps.empty_cache()
+
     return error_empirical, cross_entropy_empirical
 
 def compute_population(net, population_loader, args, device='cuda'):
@@ -726,5 +729,8 @@ def compute_population(net, population_loader, args, device='cuda'):
 
     cross_entropy_population /= (len(population_loader) * args.mc_samples)
     error_population = 1.0 - (correct_population / (len(population_loader) * population_loader.batch_size * args.mc_samples))
+
+    if device == 'cuda': torch.cuda.empty_cache()
+    elif device == 'mps': torch.mps.empty_cache()
 
     return error_population, cross_entropy_population
