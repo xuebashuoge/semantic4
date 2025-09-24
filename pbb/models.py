@@ -640,7 +640,6 @@ class ProbNNet4lChannel(nn.Module):
         def apply_channel(inp):
             nonlocal channel_params
             self.dimension = inp.numel()/inp.shape[0]
-            self.dimension = 2
             if return_channel_weight:
                 out, params = self.channel(inp, wireless, return_weight=True)
                 channel_params = params

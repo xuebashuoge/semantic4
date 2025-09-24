@@ -262,37 +262,47 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
     save_new = False
     
     if os.path.exists(certificate_file):
+        print(f"Loading certificate from {certificate_file}")
         try:
             results_dict = torch.load(certificate_file, weights_only=False, map_location=device)
         except TypeError:
             results_dict = torch.load(certificate_file, map_location=device)
 
         try:
+            print(f"Loading empirical results...")
             error_empirical = results_dict['error_empirical']
             cross_entropy_empirical = results_dict['cross_entropy_empirical']
         except KeyError:
+            print(f"Empirical results not found, computing...")
             # compute empirical risk using mc samples
             error_empirical, cross_entropy_empirical = compute_empirical(net, empirical_loader, args, device)
             results_dict['error_empirical'] = error_empirical
             results_dict['cross_entropy_empirical'] = cross_entropy_empirical
-            save_new = True 
+            save_new = True
+
         try:
+            print(f"Loading population results...")
             error_population = results_dict['error_population']
             cross_entropy_population = results_dict['cross_entropy_population']
         except KeyError:
+            print(f"Population results not found, computing...")
             # compute population risk
             error_population, cross_entropy_population = compute_population(net, population_loader, args, device)
             results_dict['error_population'] = error_population
             results_dict['cross_entropy_population'] = cross_entropy_population
             save_new = True 
+
         try:
+            print(f"Loading Lipschitz constant L_w...")
             L_w = results_dict['L_w']
         except KeyError:
+            print(f"Lipschitz constant L_w not found, computing...")
             # compute Lipschitz constant L_w
             L_w = compute_lipschitz_constant_direct(net, lip_loader, args.mc_samples, args.pmin, args.clamping, args.chunk_size, device)
             results_dict['L_w'] = L_w
             save_new = True 
     else:
+        print(f"Computing new certificate...")
         net.eval()
 
         # compute Lipschitz constant L_w
@@ -312,17 +322,19 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
             'cross_entropy_population': cross_entropy_population,
             'kl': kl,
             'L_w': L_w,
+            'dimension': net.dimension,
         }
         save_new = True
 
     try:
         dimension = results_dict['dimension']
-        save_new = True
     except KeyError:
         dimension = net.dimension
     
     # forward process for computing dimension
-    if dimension == 0:
+    if dimension <= 2:
+        print("Computing dimension...")
+        net.eval()
         with torch.no_grad():
             data_batch, _ = next(iter(population_loader))
             data_batch = data_batch.to(device)
@@ -338,7 +350,7 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
     # sigma-sub-Gaussian is equivalent to bounded in [0, 2*sigma], the loss function here is clamped in [0, log(1/pmin)]
     sigma = math.log(1/args.pmin)/2
     k = math.sqrt(len(empirical_loader.dataset))
-    dimension = net.dimension
+
     bound_ce = cross_entropy_empirical + k*sigma**2 / (2*len(empirical_loader.dataset)) + 1/k * (kl - math.log(args.delta))
 
     if args.channel_type.lower() == 'bec':
@@ -352,7 +364,7 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
     bound_ce += log_term
 
     print(f"***Final results***")
-    print(f"Dataset: {args.name_data}, Sigma: {args.sigma_prior :.5f}, pmin: {args.pmin :.5f}, Dropout: {args.dropout_prob :.5f}, Perc_train: {args.perc_train :.5f}, Perc_prior: {args.perc_prior :.5f}, L_0: {args.l_0}, Channel: {args.channel_type}, Outage: {args.outage :.5f}, MC samples: {args.mc_samples}, Clamping: {args.clamping}, Empirical error: {error_empirical :.5f}, Empirical CE loss: {cross_entropy_empirical :.5f}, Population error: {error_population :.5f}, Population CE loss: {cross_entropy_population :.5f}, KL: {kl :.5f}, L_w: {L_w :.5f}")
+    print(f"Dataset: {args.name_data}, Sigma: {args.sigma_prior :.5f}, pmin: {args.pmin :.5f}, Dropout: {args.dropout_prob :.5f}, Perc_train: {args.perc_train :.5f}, Perc_prior: {args.perc_prior :.5f}, L_0: {args.l_0}, Channel: {args.channel_type}, Outage: {args.outage :.5f}, MC samples: {args.mc_samples}, Clamping: {args.clamping}, Empirical error: {error_empirical :.5f}, Empirical CE loss: {cross_entropy_empirical :.5f}, Population error: {error_population :.5f}, Population CE loss: {cross_entropy_population :.5f}, KL: {kl :.5f}, L_w: {L_w :.5f}, d: {dimension}")
 
     
 
