@@ -12,7 +12,7 @@
     "outage_prime": 0.5,
     "noise_var": 1,
     "batch_size": 250,
-    "lip_bs": 100,
+    "lip_bs": 200,
     "perc_train": 1.0,
     "perc_prior": 0.5,
     "prior_epochs": 20,
