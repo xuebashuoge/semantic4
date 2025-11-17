@@ -591,7 +591,7 @@ def compute_lipschitz_constant_new(args, loader, mc_samples, pmin, clamping, chu
 
     # Define a function that performs the core calculation for a SINGLE data sample.
     # vmap will then vectorize this across the whole batch.
-    def compute_k_for_sample(sampled_weights, sampled_weights_prime, buffers, x_sample, y_sample):
+    def compute_k_for_sample(d_other_sq, sampled_weights, sampled_weights_prime, buffers, x_sample, y_sample):
         # --- NO CHANNEL (w) ---
         # Forward pass for the ideal network (wireless=False)
         outputs = torch.func.functional_call(
@@ -622,10 +622,12 @@ def compute_lipschitz_constant_new(args, loader, mc_samples, pmin, clamping, chu
             # Note: .contiguous() can sometimes help vmap performance
             flat_w_diff = (channel_weight - 1.0).contiguous().view(-1)
             flat_b_diff = channel_bias.contiguous().view(-1)
-            d_w = torch.linalg.norm(torch.cat((flat_w_diff, flat_b_diff)))
+            d_channel_sq = torch.sum(torch.cat((flat_w_diff, flat_b_diff))**2)
         else:
             # BEC channel case
-            d_w = torch.linalg.norm(channel_weight - 1.0)
+            d_channel_sq = torch.sum((channel_weight - 1.0)**2)
+
+        d_w = torch.sqrt(d_other_sq + d_channel_sq)
 
         # --- RATIO ---
         # The condition for the whole batch
@@ -646,7 +648,7 @@ def compute_lipschitz_constant_new(args, loader, mc_samples, pmin, clamping, chu
         return k_sample.squeeze()
 
     # Vectorize our single-sample function to run on a full batch.
-    vmapped_k_fn = torch.func.vmap(compute_k_for_sample, in_dims=(None, None, None, 0, 0), chunk_size=chunk_size, randomness="different")
+    vmapped_k_fn = torch.func.vmap(compute_k_for_sample, in_dims=(None, None, None, None, 0, 0), chunk_size=chunk_size, randomness="different")
 
     # Before the mc_samples loop, get the parameter names once
     param_names = []
@@ -673,13 +675,21 @@ def compute_lipschitz_constant_new(args, loader, mc_samples, pmin, clamping, chu
             
             buffers = {name: buf for name, buf in net.named_buffers()}
 
+            # calculate other weights (which is fixed for all data samples in the loader)
+            d_other_sq = torch.tensor(0.0, device=device)
+            for k in sampled_weights.keys():
+                if k not in sampled_weights_prime:
+                    raise RuntimeError(f"Key {k} not found in sampled_weights_prime")
+                diff = (sampled_weights[k] - sampled_weights_prime[k])
+                d_other_sq += torch.sum(diff * diff)
+            d_other_sq = d_other_sq.to(device)
 
             for data_batch, target_batch in loader:
                 data_batch, target_batch = data_batch.to(device), target_batch.to(device)
                 
                 # 2. Compute all per-sample k values in one vectorized call
-                k_values_batch = vmapped_k_fn(sampled_weights, sampled_weights_prime, buffers, data_batch, target_batch)
-                
+                k_values_batch = vmapped_k_fn(d_other_sq, sampled_weights, sampled_weights_prime, buffers, data_batch, target_batch)
+
                 # 3. Find the max k in the current batch and update the global max
                 batch_max_k = torch.max(k_values_batch).item()
                 if batch_max_k > max_k:

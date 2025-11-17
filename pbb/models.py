@@ -2006,10 +2006,43 @@ def select_network(model, layers, name_data, sigma_prior, prior_dist, l_0=-1, ch
             else:
                 raise RuntimeError(f'Wrong number of layers chosen {layers}')
         else:
-            net = ProbCNNet4lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, device=device, init_net=init_net).to(device)
+            if layers == 4:
+                net = ProbCNNet4lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, device=device, init_net=init_net).to(device)
     elif model.lower() == 'fcn':
         net = ProbNNet4lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, device=device, init_net=init_net).to(device)
     else:
         raise RuntimeError(f'Wrong model chosen {model}-{layers}')
 
     return net
+
+def select_prior_network(model, layers, name_data, dropout_prob, device='cuda'):
+    """Function to select the appropriate deterministic CNN architecture
+    to be used as prior based on the dataset provided.
+
+    Parameters
+    ----------
+    device : string
+        Device the code will run in (e.g. 'cuda')
+
+    """
+    if model.lower() == 'cnn':
+        if name_data.lower() == 'cifar10':
+            # fcn for mnist, cnn for cifar10
+            if layers == 9:
+                net0 = CNNet9l(dropout_prob=dropout_prob).to(device)
+            elif layers == 13:
+                net0 = CNNet13l(dropout_prob=dropout_prob).to(device)
+            elif layers == 15:
+                net0 = CNNet15l(dropout_prob=dropout_prob).to(device)
+            else:
+                raise RuntimeError(f'Wrong number of layers chosen {layers}')
+        else:
+            if layers == 4:
+                net0 = CNNet4l(dropout_prob=dropout_prob).to(device)
+    elif model.lower() == 'fcn':
+        if layers == 4:
+            net0 = NNet4l(dropout_prob=dropout_prob).to(device)
+    else:
+        raise RuntimeError(f'Wrong model chosen {model}-{layers}')
+
+    return net0
