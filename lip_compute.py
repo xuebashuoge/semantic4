@@ -76,9 +76,11 @@ if __name__ == '__main__':
         net0 = None
 
     # compute Lipschitz constant
-    lip_constant = compute_lipschitz_constant_new(args, loader=lip_test_loader, mc_samples=args.mc_samples, pmin=args.pmin, clamping=args.clamping, chunk_size=args.chunk_size, init_net=net0, device=device)
+    lip_constant, lip_list = compute_lipschitz_constant_new(args, loader=lip_test_loader, mc_samples=args.mc_samples, pmin=args.pmin, clamping=args.clamping, chunk_size=args.chunk_size, init_net=net0, device=device)
 
     print(f'Computed Lipschitz constant, {args.name_data}, {args.model}-{args.layers}, {args.init_prior}-prior_{args.channel_type.lower()}, {channel_specs}_chan-layer{args.l_0}, {'bounded' if args.clamping else 'unbounded'}-loss: {lip_constant}')
+
+    print(f'Lipschitz constants from each MC sample: {lip_list}')
 
     # save Lipschitz constant
     with open(f'results/lip_constant_{args.lip_name}_{args.name_data}_{args.model}-{args.layers}_{args.init_prior}-prior_{args.channel_type.lower()}_{channel_specs}_chan-layer{args.l_0}_{'bounded' if args.clamping else 'unbounded'}-loss.json', 'w') as f:
