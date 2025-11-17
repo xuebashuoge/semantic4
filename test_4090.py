@@ -9,46 +9,20 @@ Test script
 @Contact :   sugarhe58@gmail.com
 '''
 
+import json
 import torch
 import argparse
 import numpy as np
-from pbb.utils import test_exp, train_and_certificate, my_exp
+from pbb.utils import test_exp, train_and_certificate, my_exp, set_device, set_seed
 from pbb.data import loaddataset, loadbatches
 
 if __name__ == '__main__':
 
 
-    args_dict = {
-        'name': '4090-prior0.5-train1.0-empirical1.0',
-        'name_data': 'mnist',
-        'model': 'cnn',
-        'layers': 9,
-        'prior_dist': 'gaussian',
-        'sigma_prior': 0.03,
-        'l_0': 2,
-        'channel_type': 'bec',
-        'outage': 0.1,
-        'noise_var': 1,
-        'batch_size': 250,
-        'lip_bs': 250,
-        'perc_train': 1.0,
-        'perc_prior': 0.5,
-        'prior_epochs': 20,
-        'learning_rate_prior': 0.01,
-        'momentum_prior': 0.95,
-        'epochs': 100,
-        'learning_rate': 0.001,
-        'momentum': 0.95,
-        'dropout_prob': 0.0,
-        'mc_samples': 200,
-        'clamping': True,
-        'pmin': 1e-5,
-        'num_workers': 8,
-        'chunk_size': 250,    # for efficient Lipschitz constant computation
-        'seed': 7,
-        'delta': 0.0001,
-        'norm_type': 'frob',  # 'frob' or 'spectral'
-    }
+    # --- Load Config ---
+    config_path = 'config_4090.json'
+    with open(config_path, 'r') as f:
+        args_dict = json.load(f)
 
     # input parser
     parser = argparse.ArgumentParser(description='Test script for semantic4')
@@ -66,27 +40,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    # This is the key: a robust, version-agnostic way to select the device.
-    if torch.cuda.is_available():
-        device = torch.device(f"cuda:{args.gpu}")
-        print("CUDA is available. Using GPU.")
-    # Check if MPS is available (for macOS with Apple Silicon)
-    # The 'hasattr' check is crucial for compatibility with older PyTorch versions
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        device = torch.device("mps")
-        print("MPS is available. Using Apple Silicon GPU.")
-    else:
-        device = torch.device("cpu")
-        print("No GPU available. Using CPU.")
-
-    # this makes the initialised prior the same for all bounds
-    torch.manual_seed(7)
-    np.random.seed(0)
-    if device == 'cuda':
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-    elif device == 'mps':
-        torch.use_deterministic_algorithms(True)
+    device = set_device()
+    set_seed(args.seed, device)
 
     loader_kargs = {'num_workers': args.num_workers, 'pin_memory': True} if torch.cuda.is_available() else {'num_workers': args.num_workers}
 

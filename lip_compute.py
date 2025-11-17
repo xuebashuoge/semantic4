@@ -1,10 +1,10 @@
 # -*- encoding: utf-8 -*-
 '''
 
-Test script
+Lipschitz constant computation functions
 
-@File    :   test.py
-@Time    :   2025/09/02 15:14:44
+@File    :   lip_compute.py
+@Time    :   2025/11/17 11:38:05
 @Author  :   Yangshuo He
 @Contact :   sugarhe58@gmail.com
 '''
@@ -13,12 +13,11 @@ import json
 import torch
 import argparse
 import numpy as np
-from pbb.utils import test_exp, train_and_certificate, my_exp, set_device, set_seed
+from pbb.utils import compute_lipschitz_constant_new, set_device, set_seed
 from pbb.data import loaddataset, loadbatches
 
 if __name__ == '__main__':
-
-
+    
     # --- Load Config ---
     config_path = 'config.json'
     with open(config_path, 'r') as f:
@@ -40,37 +39,22 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    # set device and seed
     device = set_device()
     set_seed(args.seed, device)
 
+    # load data
     loader_kargs = {'num_workers': args.num_workers, 'pin_memory': True} if torch.cuda.is_available() else {'num_workers': args.num_workers}
 
     train, test = loaddataset(args.name_data)
 
     train_loader, test_loader, valid_loader, _, _, bound_loader, lip_all_loader, lip_test_loader = loadbatches(train, test, loader_kargs, args.batch_size, args.lip_bs, prior=True, perc_train=args.perc_train, perc_prior=args.perc_prior)
 
-    args.l_0 = 2
+    # compute Lipschitz constant
+    lip_constant = compute_lipschitz_constant_new(args, loader=lip_all_loader, mc_samples=args.mc_samples, pmin=args.pmin, clamping=args.clamping, chunk_size=args.chunk_size, device=device)
 
-    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+    print(f'Computed Lipschitz constant: {lip_constant}')
 
-
-    args.model = 'fcn'
-    args.l_0 = 2
-
-    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
-
-    # cifar10
-    args.name_data = 'cifar10'
-    args.model = 'cnn'
-    args.layers = 9
-
-    train, test = loaddataset(args.name_data)
-
-    train_loader, test_loader, valid_loader, _, _, bound_loader, lip_all_loader, lip_test_loader = loadbatches(train, test, loader_kargs, args.batch_size, args.lip_bs, prior=True, perc_train=args.perc_train, perc_prior=args.perc_prior)
-
-    args.l_0 = 2
-
-    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
-
-
-    print('All tests done!')
+    # save Lipschitz constant
+    with open('lip_constant.json', 'w') as f:
+        json.dump({'lip_constant': lip_constant}, f)

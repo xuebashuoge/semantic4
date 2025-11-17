@@ -106,6 +106,30 @@ class Bernoulli(nn.Module):
         samples = self.bernoulli_dist.sample(sample_shape).to(self.device)
         return samples
 
+class Binomial(nn.Module):
+    """Implementation of a Binomial random variable.
+
+    Parameters
+    ----------
+    n : int
+        Number of trials.
+    p : Tensor of floats
+        Probability of success.
+    device : string
+        Device the code will run in (e.g. 'cuda')
+    """
+    def __init__(self, n, p, device='cuda'):
+        super().__init__()
+        self.n = n
+        self.p = p
+        self.device = device
+        self.binomial_dist = td.Binomial(self.n, self.p)
+
+    def sample(self, sample_shape):
+        # Return a tensor with samples from the Binomial distribution
+        samples = self.binomial_dist.sample(sample_shape).to(self.device)
+        return samples
+
 class Gaussian(nn.Module):
     """Implementation of a Gaussian random variable, using softplus for
     the standard deviation and with implementation of sampling and KL
@@ -1949,3 +1973,43 @@ def computeRiskCertificates(net, toolarge, pbobj, device='cuda', lambda_var=None
 
     return train_obj, risk_ce, risk_01, kl, loss_ce_train, err_01_train
 
+def select_network(model, layers, name_data, sigma_prior, prior_dist, l_0=-1, channel_type='bec', outage=0.1, device='cuda', init_net=None):
+    """Function to select the appropriate probabilistic CNN architecture
+    based on the initial deterministic CNN provided.
+
+    Parameters
+    ----------
+    init_net : CNNet/CNNet15l object
+        Initial deterministic network used to initialise the prior
+
+    rho_prior : float
+        prior scale hyperparmeter (to initialise the scale of
+        the posterior)
+
+    prior_dist : string
+        string that indicates the type of distribution for the
+        prior and posterior
+
+    device : string
+        Device the code will run in (e.g. 'cuda')
+
+    """
+    rho_prior = math.log(math.exp(sigma_prior)-1.0)
+    if model.lower() == 'cnn':
+        if name_data.lower() == 'cifar10':
+            if layers == 9:
+                net = ProbCNNet9lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, device=device, init_net=init_net).to(device)
+            elif layers == 13:
+                net = ProbCNNet13lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, device=device, init_net=init_net).to(device)
+            elif layers == 15:
+                net = ProbCNNet15lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, device=device, init_net=init_net).to(device)
+            else:
+                raise RuntimeError(f'Wrong number of layers chosen {layers}')
+        else:
+            net = ProbCNNet4lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, device=device, init_net=init_net).to(device)
+    elif model.lower() == 'fcn':
+        net = ProbNNet4lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, device=device, init_net=init_net).to(device)
+    else:
+        raise RuntimeError(f'Wrong model chosen {model}-{layers}')
+
+    return net

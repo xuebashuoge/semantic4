@@ -2,6 +2,7 @@ import math
 import os
 import numpy as np
 import itertools
+import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -13,7 +14,7 @@ from scipy.stats import binom
 from torchvision import datasets, transforms
 from torchvision.utils import make_grid
 from tqdm import tqdm, trange
-from pbb.models import ProbLinear, ProbConv2d, WirelessChannel, NNet4l, CNNet4l, ProbNNet4l, ProbCNNet4l, ProbNNet4lChannel, ProbCNNet4lChannel, ProbCNNet9l, ProbCNNet9lChannel, CNNet9l, CNNet13l, ProbCNNet13l, ProbCNNet15l, CNNet15l, ProbCNNet13lChannel, ProbCNNet15lChannel, trainNNet, testNNet, Lambda_var, trainPNNet,trainPNNet2, computeRiskCertificates, testPosteriorMean, testStochastic, testEnsemble, compute_empirical_risk
+from pbb.models import ProbLinear, ProbConv2d, WirelessChannel, NNet4l, CNNet4l, ProbNNet4l, ProbCNNet4l, ProbNNet4lChannel, ProbCNNet4lChannel, ProbCNNet9l, ProbCNNet9lChannel, CNNet9l, CNNet13l, ProbCNNet13l, ProbCNNet15l, CNNet15l, ProbCNNet13lChannel, ProbCNNet15lChannel, trainNNet, testNNet, Lambda_var, trainPNNet,trainPNNet2, computeRiskCertificates, testPosteriorMean, testStochastic, testEnsemble, compute_empirical_risk, select_network
 from pbb.bounds import PBBobj
 from pbb import data
 from pbb.data import loaddataset, loadbatches
@@ -550,6 +551,150 @@ def compute_lipschitz_constant_efficient(net, loader, mc_samples, pmin, clamping
 
 import time
 
+def compute_lipschitz_constant_new(args, loader, mc_samples, pmin, clamping, chunk_size, init_net=None, device='cuda'):
+    """
+    Computes the Lipschitz constant based on prior distribution Q(W',W).
+
+    Parameters
+    ----------
+    net : nn.Module
+        The trained probabilistic neural network.
+    loader : DataLoader
+        The data loader to iterate over.
+    mc_samples : int
+        The number of Monte Carlo samples for the weights.
+    pmin : float
+        The minimum probability value for clamping in the loss function.
+    clamping : bool
+        Whether to apply clamping in the loss function.
+    chunk_size : int
+        Chunk size for vmap to manage memory usage.
+    device : str
+        The device to run the computation on ('cuda', 'mps', or 'cpu').
+
+    Returns
+    -------
+    float
+        The estimated Lipschitz constant (maximum ratio).
+    """
+
+    # initialize network, using prior either from init_net or from randoms
+    # if it is from random, mean is truncate normal and variance is from rho_prior, so different initialization leads to different mean
+    # prior distribution of the l0-th layer (wireless channel), should I try different initialization of outage_prime here?
+    net_prime = select_network(args.model, args.layers, args.name_data, args.sigma_prior, args.prior_dist, args.l_0, args.channel_type, args.outage_prime, init_net=init_net, device=device)
+    net_prime.eval()
+    
+    net = select_network(args.model, args.layers, args.name_data, args.sigma_prior, args.prior_dist, args.l_0, args.channel_type, 0, init_net=init_net, device=device)
+    net.eval()
+
+    max_k = 0.0
+
+    # Define a function that performs the core calculation for a SINGLE data sample.
+    # vmap will then vectorize this across the whole batch.
+    def compute_k_for_sample(sampled_weights, sampled_weights_prime, buffers, x_sample, y_sample):
+        # --- NO CHANNEL (w) ---
+        # Forward pass for the ideal network (wireless=False)
+        outputs = torch.func.functional_call(
+            net,
+            (sampled_weights, buffers),
+            args=(x_sample.unsqueeze(0),),
+            kwargs={'sample': False, 'wireless': False, 'return_channel_weight': False}
+        )
+        loss = compute_empirical_risk(outputs, y_sample.unsqueeze(0), pmin, clamping, per_sample=True)
+
+        # --- WITH CHANNEL (w') ---
+        # Forward pass for the network with the channel (wireless=True)
+        outputs_prime, channel_params = torch.func.functional_call(
+            net_prime,
+            (sampled_weights_prime, buffers),
+            args=(x_sample.unsqueeze(0),),
+            kwargs={'sample': False, 'wireless': True, 'return_channel_weight': True}
+        )
+        loss_prime = compute_empirical_risk(outputs_prime, y_sample.unsqueeze(0), pmin, clamping, per_sample=True)
+        
+        # --- DENOMINATOR ||w' - w||_2 ---
+        channel_weight, channel_bias = channel_params
+        
+        # The 'ideal' weight is 1.0 and 'ideal' bias is 0.0
+        # For BEC, channel_bias will be None.
+        if channel_bias is not None:
+            # Rayleigh channel case
+            # Note: .contiguous() can sometimes help vmap performance
+            flat_w_diff = (channel_weight - 1.0).contiguous().view(-1)
+            flat_b_diff = channel_bias.contiguous().view(-1)
+            d_w = torch.linalg.norm(torch.cat((flat_w_diff, flat_b_diff)))
+        else:
+            # BEC channel case
+            d_w = torch.linalg.norm(channel_weight - 1.0)
+
+        # --- RATIO ---
+        # The condition for the whole batch
+        condition = d_w > 1e-9
+
+        # The value if the condition is True
+        # We use torch.ones_like(d_w) to avoid division by zero for the False cases, 
+        # but their results will be discarded anyway.
+        safe_d_w = torch.where(condition, d_w, torch.ones_like(d_w))
+        value_if_true = torch.abs(loss_prime - loss) / safe_d_w
+
+        # The value if the condition is False
+        value_if_false = torch.zeros_like(d_w)
+
+        # Select between the two based on the condition
+        k_sample = torch.where(condition, value_if_true, value_if_false)
+            
+        return k_sample.squeeze()
+
+    # Vectorize our single-sample function to run on a full batch.
+    vmapped_k_fn = torch.func.vmap(compute_k_for_sample, in_dims=(None, None, None, 0, 0), chunk_size=chunk_size, randomness="different")
+
+    # Before the mc_samples loop, get the parameter names once
+    param_names = []
+    for name, module in net.named_modules():
+        if isinstance(module, (ProbLinear, ProbConv2d)):
+            param_names.append(f"{name}.weight.mu")
+            param_names.append(f"{name}.bias.mu")
+    # share the same param names for net_prime
+    param_names_prime = param_names
+
+    print("Computing Lipschitz constant with the new method using torch.func...")
+    with tqdm(total=len(loader) * mc_samples, desc="Processing") as pbar:
+        for _ in range(mc_samples):
+
+            # 1. Sample one set of Bayesian weights for this MC iteration.
+            sampled_weights = dict.fromkeys(param_names) # Pre-allocate
+            sampled_weights_prime = dict.fromkeys(param_names_prime)
+            for name, module in net.named_modules():
+                if isinstance(module, (ProbLinear, ProbConv2d)):
+                    sampled_weights[f"{name}.weight.mu"] = module.weight.sample()
+                    sampled_weights[f"{name}.bias.mu"] = module.bias.sample()
+                    sampled_weights_prime[f"{name}.weight.mu"] = module.weight.sample()
+                    sampled_weights_prime[f"{name}.bias.mu"] = module.bias.sample()
+            
+            buffers = {name: buf for name, buf in net.named_buffers()}
+
+
+            for data_batch, target_batch in loader:
+                data_batch, target_batch = data_batch.to(device), target_batch.to(device)
+                
+                # 2. Compute all per-sample k values in one vectorized call
+                k_values_batch = vmapped_k_fn(sampled_weights, sampled_weights_prime, buffers, data_batch, target_batch)
+                
+                # 3. Find the max k in the current batch and update the global max
+                batch_max_k = torch.max(k_values_batch).item()
+                if batch_max_k > max_k:
+                    max_k = batch_max_k
+
+                pbar.update(1)
+            
+            # Clean up memory after each MC sample
+            del sampled_weights, sampled_weights_prime, buffers
+            if device == 'cuda': torch.cuda.empty_cache()
+            elif device == 'mps': torch.mps.empty_cache()
+            
+    
+    return max_k
+
 def compute_lipschitz_constant_direct(net, loader, mc_samples, pmin, clamping, chunk_size, device):
     """
     Computes the Lipschitz constant using the direct ratio method, vectorized with torch.func.vmap.
@@ -734,3 +879,32 @@ def compute_population(net, population_loader, args, device='cuda'):
     elif device == 'mps': torch.mps.empty_cache()
 
     return error_population, cross_entropy_population
+
+def set_device():
+    # This is the key: a robust, version-agnostic way to select the device.
+    if torch.cuda.is_available():
+        device = torch.device(f"cuda:{args.gpu}")
+        print("CUDA is available. Using GPU.")
+    # Check if MPS is available (for macOS with Apple Silicon)
+    # The 'hasattr' check is crucial for compatibility with older PyTorch versions
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = torch.device("mps")
+        print("MPS is available. Using Apple Silicon GPU.")
+    else:
+        device = torch.device("cpu")
+        print("No GPU available. Using CPU.")
+
+    return device
+
+def set_seed(seed, device='cuda'):
+    # this makes the initialised prior the same for all bounds
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    if device == 'cuda':
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed) # for multi-GPU
+    else:
+        torch.use_deterministic_algorithms(True)
