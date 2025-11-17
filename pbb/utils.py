@@ -659,6 +659,9 @@ def compute_lipschitz_constant_new(args, loader, mc_samples, pmin, clamping, chu
     # share the same param names for net_prime
     param_names_prime = param_names
 
+    # record k for different mc samples
+    k_mc = []
+
     print("Computing Lipschitz constant with the new method using torch.func...")
     with tqdm(total=len(loader) * mc_samples, desc="Processing") as pbar:
         for _ in range(mc_samples):
@@ -696,14 +699,16 @@ def compute_lipschitz_constant_new(args, loader, mc_samples, pmin, clamping, chu
                     max_k = batch_max_k
 
                 pbar.update(1)
-            
+
+            k_mc.append(max_k)
+
             # Clean up memory after each MC sample
             del sampled_weights, sampled_weights_prime, buffers
             if device == 'cuda': torch.cuda.empty_cache()
             elif device == 'mps': torch.mps.empty_cache()
             
     
-    return max_k
+    return max_k, k_mc
 
 def compute_lipschitz_constant_direct(net, loader, mc_samples, pmin, clamping, chunk_size, device):
     """
