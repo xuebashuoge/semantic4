@@ -584,6 +584,7 @@ def compute_lipschitz_constant_new(args, loader, mc_samples, pmin, clamping, chu
     net_prime = select_network(args.model, args.layers, args.name_data, args.sigma_prior, args.prior_dist, args.l_0, args.channel_type, args.outage_prime, init_net=init_net, device=device)
     net_prime.eval()
     
+    # dummy net
     net = select_network(args.model, args.layers, args.name_data, args.sigma_prior, args.prior_dist, args.l_0, args.channel_type, 0, init_net=init_net, device=device)
     net.eval()
 
@@ -666,6 +667,19 @@ def compute_lipschitz_constant_new(args, loader, mc_samples, pmin, clamping, chu
     with tqdm(total=len(loader) * mc_samples, desc="Processing") as pbar:
         for _ in range(mc_samples):
 
+            max_k_mc = 0.0
+
+            # if random prior, initialize different mean for each mc sample
+            if args.init_prior.lower() == 'random':
+                # initialize network, using prior either from init_net or from randoms
+                # if it is from random, mean is truncate normal and variance is from rho_prior, so different initialization leads to different mean
+                # prior distribution of the l0-th layer (wireless channel), should I try different initialization of outage_prime here?
+                net_prime = select_network(args.model, args.layers, args.name_data, args.sigma_prior, args.prior_dist, args.l_0, args.channel_type, args.outage_prime, init_net=init_net, device=device)
+                net_prime.eval()
+                
+                net = select_network(args.model, args.layers, args.name_data, args.sigma_prior, args.prior_dist, args.l_0, args.channel_type, 0, init_net=init_net, device=device)
+                net.eval()
+
             # 1. Sample one set of Bayesian weights for this MC iteration.
             sampled_weights = dict.fromkeys(param_names) # Pre-allocate
             sampled_weights_prime = dict.fromkeys(param_names_prime)
@@ -697,10 +711,12 @@ def compute_lipschitz_constant_new(args, loader, mc_samples, pmin, clamping, chu
                 batch_max_k = torch.max(k_values_batch).item()
                 if batch_max_k > max_k:
                     max_k = batch_max_k
+                if batch_max_k > max_k_mc:
+                    max_k_mc = batch_max_k
 
                 pbar.update(1)
 
-            k_mc.append(max_k)
+            k_mc.append(max_k_mc)
 
             # Clean up memory after each MC sample
             del sampled_weights, sampled_weights_prime, buffers
