@@ -81,7 +81,7 @@ class ComplexNormal(nn.Module):
         # Return a sample from the Complex Normal distribution
         epsilon_real = torch.randn(sample_shape).to(self.device)
         epsilon_imag = torch.randn(sample_shape).to(self.device)
-        return torch.sqrt(self.var/2) * (epsilon_real + 1j * epsilon_imag)
+        return math.sqrt(self.var/2) * (epsilon_real + 1j * epsilon_imag)
 
 class Bernoulli(nn.Module):
     """Implementation of a Bernoulli random variable.
@@ -318,7 +318,7 @@ class WirelessChannel(nn.Module):
     
     """
 
-    def __init__(self, channel_type='bec', outage=0.1, noise_var=1, device='cuda'):
+    def __init__(self, channel_type='bec', outage=0.1, tx_pow=1.0, noise_var=1, device='cuda'):
         super().__init__()
         self.channel_type = channel_type.lower()
         self.device = device
@@ -327,21 +327,55 @@ class WirelessChannel(nn.Module):
             self.weight = Bernoulli(outage, device=device)
             self.bias = None
         elif self.channel_type == 'rayleigh':
-            self.weight = ComplexNormal(1, device=device)
+            self.weight =ComplexNormal(tx_pow, device=device)
             self.bias = ComplexNormal(noise_var, device=device)
         else:
             raise RuntimeError(f'Wrong channel type {channel_type}')
         
-    def forward(self, input, wireless=False, return_weight=False):
+    def forward(self, input, wireless=False, scalar_gain=True, return_weight=False):
         if self.channel_type == 'bec':
             weight = self.weight.sample(input.shape) if wireless else torch.ones(input.shape).to(self.device)
             output = weight * input
 
             return (output, (weight, None)) if return_weight else output
         elif self.channel_type == 'rayleigh':
-            weight = self.weight.sample(input.shape) if wireless else torch.ones(1).to(self.device)
-            bias = self.bias.sample(input.shape) if wireless else torch.zeros(1).to(self.device)
-            output = weight * input + bias
+            # separate real and imaginary parts and multiply with channel gain
+            original_shape = input.shape
+            batch_size = original_shape[0]
+
+            if input.dim() > 2:
+                # for high dimensional features
+                total_features = input.numel() // batch_size
+                input_flat = input.view(batch_size, total_features)
+            else:
+                # for FCNs
+                total_features = original_shape[-1]
+                input_flat = input
+            
+            if total_features % 2 != 0:
+                raise RuntimeError('Input feature dimension must be even for complex representation!')
+            half_features = total_features // 2
+
+            input_real, input_imag = torch.split(input_flat, half_features, dim=-1)
+
+            signal = torch.complex(input_real, input_imag)
+
+            # choose between simple flat fading or freq-selective fading
+            if scalar_gain:
+                dim = (batch_size, 1)
+            else:
+                dim = signal.shape
+
+            weight = self.weight.sample(dim) if wireless else torch.ones(dim).to(self.device)
+            bias = self.bias.sample(dim) if wireless else torch.zeros(dim).to(self.device)
+
+            y = weight * signal + bias
+
+            # recombine real and imaginary parts
+            output_flat = torch.cat((y.real, y.imag), dim=-1)
+
+            output = output_flat.view(original_shape)
+
             return (output, (weight, bias)) if return_weight else output
 
 
@@ -649,7 +683,7 @@ class ProbNNet4lChannel(nn.Module):
         self.dimension = 0
 
         
-        self.channel = WirelessChannel(channel_type, outage, noise_var, device)
+        self.channel = WirelessChannel(channel_type=channel_type, outage=outage, noise_var=noise_var, device=device)
 
         self.l1 = ProbLinear(28*28, 600, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.l1 if init_net else None)
         self.l2 = ProbLinear(600, 600, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.l2 if init_net else None)
@@ -745,7 +779,7 @@ class ProbCNNet4lChannel(nn.Module):
         self.dimension = 0
 
         
-        self.channel = WirelessChannel(channel_type, outage, noise_var, device)
+        self.channel = WirelessChannel(channel_type=channel_type, outage=outage, noise_var=noise_var, device=device)
 
         self.conv1 = ProbConv2d(1, 32, 3, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.conv1 if init_net else None)
         self.conv2 = ProbConv2d(32, 64, 3, rho_prior, prior_dist=prior_dist, device=device, init_layer=init_net.conv2 if init_net else None)
@@ -909,7 +943,7 @@ class ProbCNNet9lChannel(nn.Module):
         self.dimension = 0
 
         
-        self.channel = WirelessChannel(channel_type, outage, noise_var, device)
+        self.channel = WirelessChannel(channel_type=channel_type, outage=outage, noise_var=noise_var, device=device)
         
         self.conv1 = ProbConv2d(in_channels=3, out_channels=32, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv1 if init_net else None)
         self.conv2 = ProbConv2d(in_channels=32, out_channels=64, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv2 if init_net else None)
@@ -1135,7 +1169,7 @@ class ProbCNNet13lChannel(nn.Module):
         self.l_0 = l_0
         self.dimension = 0
 
-        self.channel = WirelessChannel(channel_type, outage, noise_var, device)
+        self.channel = WirelessChannel(channel_type=channel_type, outage=outage, noise_var=noise_var, device=device)
 
         self.conv1 = ProbConv2d(in_channels=3, out_channels=32, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv1 if init_net else None)
         self.conv2 = ProbConv2d(in_channels=32, out_channels=64, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv2 if init_net else None)
@@ -1383,7 +1417,7 @@ class ProbCNNet15lChannel(nn.Module):
         self.dimension = 0
 
         
-        self.channel = WirelessChannel(channel_type, outage, noise_var, device)
+        self.channel = WirelessChannel(channel_type=channel_type, outage=outage, noise_var=noise_var, device=device)
 
         self.conv1 = ProbConv2d( in_channels=3, out_channels=32, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv1 if init_net else None)
         self.conv2 = ProbConv2d( in_channels=32, out_channels=64, rho_prior=rho_prior, prior_dist=prior_dist, device=device, kernel_size=3, padding=1, init_layer=init_net.conv2 if init_net else None)
