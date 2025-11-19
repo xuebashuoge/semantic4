@@ -18,10 +18,16 @@ from pbb.utils import compute_lipschitz_constant_new, set_device, set_seed
 from pbb.data import loaddataset, loadbatches
 from pbb.models import select_prior_network
 
+# Set the environment variable
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+
+# Now enable deterministic algorithms
+torch.use_deterministic_algorithms(True)
+
 if __name__ == '__main__':
     
     # --- Load Config ---
-    config_path = 'config.json'
+    config_path = 'config_4090.json'
     with open(config_path, 'r') as f:
         args_dict = json.load(f)
 
