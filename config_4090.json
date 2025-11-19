@@ -27,5 +27,6 @@
     "chunk_size": 250,
     "seed": 7,
     "delta": 0.0001,
-    "norm_type": "frob"
+    "norm_type": "frob",
+    "lip_name": "test-set"
 }

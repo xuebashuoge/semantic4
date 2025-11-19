@@ -14,7 +14,7 @@ from scipy.stats import binom
 from torchvision import datasets, transforms
 from torchvision.utils import make_grid
 from tqdm import tqdm, trange
-from pbb.models import ProbLinear, ProbConv2d, WirelessChannel, NNet4l, CNNet4l, ProbNNet4l, ProbCNNet4l, ProbNNet4lChannel, ProbCNNet4lChannel, ProbCNNet9l, ProbCNNet9lChannel, CNNet9l, CNNet13l, ProbCNNet13l, ProbCNNet15l, CNNet15l, ProbCNNet13lChannel, ProbCNNet15lChannel, trainNNet, testNNet, Lambda_var, trainPNNet,trainPNNet2, computeRiskCertificates, testPosteriorMean, testStochastic, testEnsemble, compute_empirical_risk, select_network
+from pbb.models import ProbLinear, ProbConv2d, WirelessChannel, NNet4l, CNNet4l, ProbNNet4l, ProbCNNet4l, ProbNNet4lChannel, ProbCNNet4lChannel, ProbCNNet9l, ProbCNNet9lChannel, CNNet9l, CNNet13l, ProbCNNet13l, ProbCNNet15l, CNNet15l, ProbCNNet13lChannel, ProbCNNet15lChannel, trainNNet, testNNet, Lambda_var, trainPNNet,trainPNNet2, computeRiskCertificates, testPosteriorMean, testStochastic, testEnsemble, compute_empirical_risk, select_network, select_prior_network
 from pbb.bounds import PBBobj
 from pbb import data
 from pbb.data import loaddataset, loadbatches
@@ -39,25 +39,7 @@ def train_and_certificate(args, train_loader, prior_loader, test_loader, empiric
     # learn prior
     print('Learning prior...')
 
-    if args.model.lower() == 'cnn':
-        if args.name_data.lower() == 'cifar10':
-            # fcn for mnist, cnn for cifar10
-            if args.layers == 9:
-                net0 = CNNet9l(dropout_prob=args.dropout_prob).to(device)
-            elif args.layers == 13:
-                net0 = CNNet13l(dropout_prob=args.dropout_prob).to(device)
-            elif args.layers == 15:
-                net0 = CNNet15l(dropout_prob=args.dropout_prob).to(device)
-            else:
-                raise RuntimeError(f'Wrong number of layers chosen {args.layers}')
-        else:
-            args.layers = 4
-            net0 = CNNet4l(dropout_prob=args.dropout_prob).to(device)
-    elif args.model.lower() == 'fcn':
-        args.layers = 4
-        net0 = NNet4l(dropout_prob=args.dropout_prob).to(device)
-    else:
-        raise RuntimeError(f'Wrong model chosen {args.model}-{args.layers}')
+    net0 = select_prior_network(args.model, args.layers, args.name_data, args.dropout_prob, device=device)
     
     prior_folder = f'results/prior/{args.name}_{args.name_data}_{args.model}-{args.layers}_sig{args.sigma_prior}_pmin{args.pmin}_{args.prior_dist}_epochpri{args.prior_epochs}_bs{args.batch_size}_lrpri{args.learning_rate_prior}_mompri{args.momentum_prior}_drop{args.dropout_prob}_perc{args.perc_prior}/'
 
@@ -66,22 +48,7 @@ def train_and_certificate(args, train_loader, prior_loader, test_loader, empiric
     # load probabilistic model
     print('Training posterior...')
 
-    if args.model.lower() == 'cnn':
-        if args.name_data.lower() == 'cifar10':
-            if args.layers == 9:
-                net = ProbCNNet9lChannel(rho_prior, prior_dist=args.prior_dist, l_0=args.l_0, channel_type=args.channel_type, outage=args.outage, device=device, init_net=net0).to(device)
-            elif args.layers == 13:
-                net = ProbCNNet13lChannel(rho_prior, prior_dist=args.prior_dist, l_0=args.l_0, channel_type=args.channel_type, outage=args.outage, device=device, init_net=net0).to(device)
-            elif args.layers == 15:
-                net = ProbCNNet15lChannel(rho_prior, prior_dist=args.prior_dist, l_0=args.l_0, channel_type=args.channel_type, outage=args.outage, device=device, init_net=net0).to(device)
-            else:
-                raise RuntimeError(f'Wrong number of layers chosen {args.layers}')
-        else:
-            net = ProbCNNet4lChannel(rho_prior, prior_dist=args.prior_dist, l_0=args.l_0, channel_type=args.channel_type, outage=args.outage, device=device, init_net=net0).to(device)
-    elif args.model.lower() == 'fcn':
-        net = ProbNNet4lChannel(rho_prior, prior_dist=args.prior_dist, l_0=args.l_0, channel_type=args.channel_type, outage=args.outage, device=device, init_net=net0).to(device)
-    else:
-        raise RuntimeError(f'Wrong model chosen {args.model}-{args.layers}')
+    net = select_network(args.model, args.layers, args.name_data, args.sigma_prior, args.prior_dist, l_0=args.l_0, channel_type=args.channel_type, outage=args.outage, init_net=net0, device=device)
 
     posterior_folder = f'results/{args.name}_{args.name_data}_{args.model}-{args.layers}_sig{args.sigma_prior}_pmin{args.pmin}_{args.prior_dist}_epoch{args.epochs}_bs{args.batch_size}_lr{args.learning_rate}_mom{args.momentum}_drop{args.dropout_prob}/'
     kl = train_posterior(net, train_loader, posterior_folder, args, device)
