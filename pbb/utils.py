@@ -917,7 +917,7 @@ def compute_population(net, population_loader, args, device='cuda'):
 
     return error_population, cross_entropy_population
 
-def set_device():
+def set_device(args):
     # This is the key: a robust, version-agnostic way to select the device.
     if torch.cuda.is_available():
         device = torch.device(f"cuda:{args.gpu}")

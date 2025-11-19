@@ -43,7 +43,7 @@ if __name__ == '__main__':
 
 
     # set device and seed
-    device = set_device()
+    device = set_device(args)
     set_seed(args.seed, device)
 
     # load data

@@ -18,6 +18,12 @@ from pbb.utils import compute_lipschitz_constant_new, set_device, set_seed
 from pbb.data import loaddataset, loadbatches
 from pbb.models import select_prior_network
 
+# Set the environment variable
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+
+# Now enable deterministic algorithms
+torch.use_deterministic_algorithms(True)
+
 if __name__ == '__main__':
     
     # --- Load Config ---
@@ -43,7 +49,7 @@ if __name__ == '__main__':
 
 
     # set device and seed
-    device = set_device()
+    device = set_device(args)
     set_seed(args.seed, device)
 
     # load data
