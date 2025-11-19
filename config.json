@@ -7,7 +7,7 @@
     "prior_dist": "gaussian",
     "sigma_prior": 0.03,
     "l_0": 2,
-    "channel_type": "bec",
+    "channel_type": "rayleigh",
     "outage": 0.1,
     "outage_prime": 0.5,
     "noise_var": 1,
@@ -22,7 +22,7 @@
     "learning_rate": 0.001,
     "momentum": 0.95,
     "dropout_prob": 0.0,
-    "mc_samples": 100,
+    "mc_samples": 20,
     "clamping": true,
     "pmin": 1e-05,
     "num_workers": 8,
@@ -30,5 +30,5 @@
     "seed": 7,
     "delta": 0.0001,
     "norm_type": "frob",
-    "lip_name": "test-set"
+    "lip_name": "debug"
 }

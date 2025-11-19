@@ -623,28 +623,34 @@ def compute_lipschitz_constant_new(args, loader, mc_samples, pmin, clamping, chu
             # Note: .contiguous() can sometimes help vmap performance
             flat_w_diff = (channel_weight - 1.0).contiguous().view(-1)
             flat_b_diff = channel_bias.contiguous().view(-1)
-            d_channel_sq = torch.sum(torch.cat((flat_w_diff, flat_b_diff))**2)
+            # d_channel_sq = torch.sum(flat_w_diff.abs()**2) + torch.sum(flat_b_diff.abs()**2)
+
+            # another valid but larger distance metric
+            d_channel_sq = (torch.sqrt(torch.sum(flat_w_diff.abs()**2)) + torch.sqrt(torch.sum(flat_b_diff.abs()**2)))**2
         else:
             # BEC channel case
             d_channel_sq = torch.sum((channel_weight - 1.0)**2)
 
         d_w = torch.sqrt(d_other_sq + d_channel_sq)
 
-        # --- RATIO ---
-        # The condition for the whole batch
-        condition = d_w > 1e-9
+        # # --- RATIO ---
+        # # The condition for the whole batch
+        # condition = d_w > 1e-9
 
-        # The value if the condition is True
-        # We use torch.ones_like(d_w) to avoid division by zero for the False cases, 
-        # but their results will be discarded anyway.
-        safe_d_w = torch.where(condition, d_w, torch.ones_like(d_w))
-        value_if_true = torch.abs(loss_prime - loss) / safe_d_w
+        # # The value if the condition is True
+        # # We use torch.ones_like(d_w) to avoid division by zero for the False cases, 
+        # # but their results will be discarded anyway.
+        # safe_d_w = torch.where(condition, d_w, torch.ones_like(d_w))
+        # value_if_true = torch.abs(loss_prime - loss) / safe_d_w
 
-        # The value if the condition is False
-        value_if_false = torch.zeros_like(d_w)
+        # # The value if the condition is False
+        # value_if_false = torch.zeros_like(d_w)
 
-        # Select between the two based on the condition
-        k_sample = torch.where(condition, value_if_true, value_if_false)
+        # # Select between the two based on the condition
+        # k_sample = torch.where(condition, value_if_true, value_if_false)
+
+        # simpler version without condition
+        k_sample = torch.abs(loss_prime - loss) / d_w
             
         return k_sample.squeeze()
 
