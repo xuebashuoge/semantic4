@@ -1,3 +1,4 @@
+import json
 import math
 import os
 import numpy as np
@@ -33,8 +34,6 @@ def my_exp(args, device='cuda', num_workers=8):
 
 
 def train_and_certificate(args, train_loader, prior_loader, test_loader, empirical_loader, population_loader, lip_loader, device='cuda'):
-
-    rho_prior = math.log(math.exp(args.sigma_prior)-1.0)
 
     # learn prior
     print('Learning prior...')
@@ -225,7 +224,22 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
         channel_specs = f'outage{args.outage}'
     else:
         channel_specs = 'nochannel'
-    certificate_file = f"{folder}/{args.channel_type.lower()}_{channel_specs}_chan-layer{args.l_0}_mcsamples{args.mc_samples}_results.pth"
+    certificate_file = f"{folder}/{args.certificate_type.lower()}_{args.channel_type.lower()}_{channel_specs}_chan-layer{args.l_0}_mcsamples{args.mc_samples}_{args.init_prior}-prior_{args.channel_type.lower()}_{channel_specs}_{'bounded' if args.clamping else 'unbounded'}_results.pth"
+
+    if args.channel_type.lower() == 'rayleigh':
+        channel_specs_prime = f'noise{args.noise_var_prime}'
+    elif args.channel_type.lower() == 'bec':
+        channel_specs_prime = f'outage{args.outage_prime}'
+    else:
+        channel_specs_prime = 'nochannel'
+    # load lipschitz constant
+    lip_file = f'results/lip_constant_{args.lip_name}_{args.name_data}_{args.model}-{args.layers}_{args.init_prior}-prior_{args.channel_type.lower()}_{channel_specs_prime}_chan-layer{args.l_0}_{'bounded' if args.clamping else 'unbounded'}-loss.json'
+    
+    with open(lip_file, 'r') as f:
+        lip_data = json.load(f)
+        L_w = lip_data['lip_constant']
+        print(f'Loaded Lipschitz constant from {lip_file}: L_w={L_w}')
+
 
     save_new = False
     
@@ -260,21 +274,11 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
             results_dict['cross_entropy_population'] = cross_entropy_population
             save_new = True 
 
-        try:
-            print(f"Loading Lipschitz constant L_w...")
-            L_w = results_dict['L_w']
-        except KeyError:
-            print(f"Lipschitz constant L_w not found, computing...")
-            # compute Lipschitz constant L_w
-            L_w = compute_lipschitz_constant_direct(net, lip_loader, args.mc_samples, args.pmin, args.clamping, args.chunk_size, device)
-            results_dict['L_w'] = L_w
-            save_new = True 
+        results_dict['L_w'] = L_w
+        save_new = True 
     else:
         print(f"Computing new certificate...")
         net.eval()
-
-        # compute Lipschitz constant L_w
-        L_w = compute_lipschitz_constant_direct(net, lip_loader, args.mc_samples, args.pmin, args.clamping, args.chunk_size, device)
 
         # compute empirical risk using mc samples
         error_empirical, cross_entropy_empirical = compute_empirical(net, empirical_loader, args, device)
@@ -310,8 +314,7 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
         results_dict['dimension'] = dimension = net.dimension
         save_new = True
     
-    if save_new:
-        torch.save(results_dict, certificate_file)
+    
 
     
     # bound evaluation
@@ -319,22 +322,68 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
     sigma = math.log(1/args.pmin)/2
     k = math.sqrt(len(empirical_loader.dataset))
 
-    bound_ce = cross_entropy_empirical + k*sigma**2 / (2*len(empirical_loader.dataset)) + 1/k * (kl - math.log(args.delta))
+    bound = k*sigma**2 / (2*len(empirical_loader.dataset)) + 1/k * (kl - math.log(args.delta))
+
+    # calculate binomial bound term
+    def calculate_torch(d: int, p_0: float, device='cuda'):
+        if device != 'cuda':
+            device = 'cpu'
+            
+        if d <= 0: return 0.0
+        
+        # Move to device immediately
+        r = torch.arange(1, d + 1, dtype=torch.float64, device=device)
+        
+        # Log-probability calculation (numerically stable)
+        log_factorial_d = torch.lgamma(torch.tensor(d + 1.0, dtype=torch.float64, device=device))
+        log_factorial_r = torch.lgamma(r + 1)
+        log_factorial_d_minus_r = torch.lgamma(d - r + 1)
+        
+        log_combinations = log_factorial_d - log_factorial_r - log_factorial_d_minus_r
+        
+        p_0_clamped = max(1e-10, min(1.0 - 1e-10, p_0))
+        log_probs = (
+            log_combinations 
+            + r * math.log(p_0_clamped) 
+            + (d - r) * math.log(1 - p_0_clamped)
+        )
+        
+        probs = torch.exp(log_probs)
+        return torch.sum(probs * torch.sqrt(r)).item()
 
     if args.channel_type.lower() == 'bec':
         if args.norm_type.lower() == 'frob':
-            dimension_list = np.arange(0, dimension+1)
+            if args.certificate_type.lower() == 'general':
+                pass
+            elif args.certificate_type.lower() == 'corollary':
+                channel_term = L_w * calculate_torch(dimension, args.outage, device=device) 
 
-            binom_coeffs = binom.pmf(dimension_list, n=dimension, p=args.outage)
+    bound += channel_term 
+    bound_ce = cross_entropy_empirical + bound
+    bound_01 = error_empirical + bound
+    results_dict['bound'] = bound
+    results_dict['bound_ce'] = bound_ce
+    results_dict['bound_01'] = bound_01
 
-            log_term = 1/k * math.log(np.sum(binom_coeffs * np.exp(k * L_w * np.sqrt(dimension_list))))
-
-    bound_ce += log_term
+    if save_new:
+        torch.save(results_dict, certificate_file)
 
     print(f"***Final results***")
-    print(f"Dataset: {args.name_data}, Sigma: {args.sigma_prior :.5f}, pmin: {args.pmin :.5f}, Dropout: {args.dropout_prob :.5f}, Perc_train: {args.perc_train :.5f}, Perc_prior: {args.perc_prior :.5f}, L_0: {args.l_0}, Channel: {args.channel_type}, Outage: {args.outage :.5f}, MC samples: {args.mc_samples}, Clamping: {args.clamping}, Empirical error: {error_empirical :.5f}, Empirical CE loss: {cross_entropy_empirical :.5f}, Population error: {error_population :.5f}, Population CE loss: {cross_entropy_population :.5f}, KL: {kl :.5f}, L_w: {L_w :.5f}, d: {dimension}")
-
+    print(f"Dataset: {args.name_data}, Sigma: {args.sigma_prior :.5f}, pmin: {args.pmin :.5f}, Dropout: {args.dropout_prob :.5f}, Perc_train: {args.perc_train :.5f}, Perc_prior: {args.perc_prior :.5f}, L_0: {args.l_0}, Channel: {args.channel_type}, Outage: {args.outage :.5f}, MC samples: {args.mc_samples}, Clamping: {args.clamping}, KL: {kl :.5f}, L_w: {L_w :.5f}, d: {dimension}")
     
+    # Headers for the table
+    print(f"{'Metric':<10} | {'Population':<12} | {'Empirical':<12} | {'Bound':<12} | {'Bound (Spec)':<12}")
+    print("-" * 70)
+
+    # Row 1: 0-1 Error
+    # Compares: Pop Error vs Emp Error vs General Bound vs Bound_01
+    print(f"{'01':<10} | {error_population:<12.5f} | {error_empirical:<12.5f} | {bound:<12.5f} | {bound_01:<12.5f}")
+
+    # Row 2: Cross Entropy Loss
+    # Compares: Pop CE vs Emp CE vs General Bound vs Bound_CE
+    print(f"{'CE':<10} | {cross_entropy_population:<12.5f} | {cross_entropy_empirical:<12.5f} | {bound:<12.5f} | {bound_ce:<12.5f}")
+
+
 
 def compute_lipschitz_constant(net, loaders, mc_samples, pmin, clamping, device):
     """
@@ -548,11 +597,11 @@ def compute_lipschitz_constant_new(args, loader, mc_samples, pmin, clamping, chu
     # initialize network, using prior either from init_net or from randoms
     # if it is from random, mean is truncate normal and variance is from rho_prior, so different initialization leads to different mean
     # prior distribution of the l0-th layer (wireless channel), should I try different initialization of outage_prime here?
-    net_prime = select_network(args.model, args.layers, args.name_data, args.sigma_prior, args.prior_dist, args.l_0, args.channel_type, args.outage_prime, init_net=init_net, device=device)
+    net_prime = select_network(args.model, args.layers, args.name_data, args.sigma_prior, args.prior_dist, args.l_0, args.channel_type, args.outage_prime, args.noise_var_prime, init_net=init_net, device=device)
     net_prime.eval()
     
     # dummy net
-    net = select_network(args.model, args.layers, args.name_data, args.sigma_prior, args.prior_dist, args.l_0, args.channel_type, 0, init_net=init_net, device=device)
+    net = select_network(args.model, args.layers, args.name_data, args.sigma_prior, args.prior_dist, args.l_0, args.channel_type, 0.0, 0.0, init_net=init_net, device=device)
     net.eval()
 
     max_k = 0.0

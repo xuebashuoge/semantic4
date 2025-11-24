@@ -56,9 +56,9 @@ if __name__ == '__main__':
 
     os.makedirs('results', exist_ok=True)
     if args.channel_type.lower() == 'rayleigh':
-        channel_specs = f'noise{args.noise_var}'
+        channel_specs = f'noise{args.noise_var_prime}'
     elif args.channel_type.lower() == 'bec':
-        channel_specs = f'outage{args.outage}'
+        channel_specs = f'outage{args.outage_prime}'
     else:
         channel_specs = 'nochannel'
 

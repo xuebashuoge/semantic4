@@ -2007,7 +2007,7 @@ def computeRiskCertificates(net, toolarge, pbobj, device='cuda', lambda_var=None
 
     return train_obj, risk_ce, risk_01, kl, loss_ce_train, err_01_train
 
-def select_network(model, layers, name_data, sigma_prior, prior_dist, l_0=-1, channel_type='bec', outage=0.1, device='cuda', init_net=None):
+def select_network(model, layers, name_data, sigma_prior, prior_dist, l_0=-1, channel_type='bec', outage=0.1, noise_var=1, device='cuda', init_net=None):
     """Function to select the appropriate probabilistic CNN architecture
     based on the initial deterministic CNN provided.
 
@@ -2032,18 +2032,18 @@ def select_network(model, layers, name_data, sigma_prior, prior_dist, l_0=-1, ch
     if model.lower() == 'cnn':
         if name_data.lower() == 'cifar10':
             if layers == 9:
-                net = ProbCNNet9lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, device=device, init_net=init_net).to(device)
+                net = ProbCNNet9lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, noise_var=noise_var, device=device, init_net=init_net).to(device)
             elif layers == 13:
-                net = ProbCNNet13lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, device=device, init_net=init_net).to(device)
+                net = ProbCNNet13lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, noise_var=noise_var, device=device, init_net=init_net).to(device)
             elif layers == 15:
-                net = ProbCNNet15lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, device=device, init_net=init_net).to(device)
+                net = ProbCNNet15lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, noise_var=noise_var, device=device, init_net=init_net).to(device)
             else:
                 raise RuntimeError(f'Wrong number of layers chosen {layers}')
         else:
             if layers == 4:
-                net = ProbCNNet4lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, device=device, init_net=init_net).to(device)
+                net = ProbCNNet4lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, noise_var=noise_var, device=device, init_net=init_net).to(device)
     elif model.lower() == 'fcn':
-        net = ProbNNet4lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, device=device, init_net=init_net).to(device)
+        net = ProbNNet4lChannel(rho_prior, prior_dist=prior_dist, l_0=l_0, channel_type=channel_type, outage=outage, noise_var=noise_var, device=device, init_net=init_net).to(device)
     else:
         raise RuntimeError(f'Wrong model chosen {model}-{layers}')
 
