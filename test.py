@@ -46,10 +46,10 @@ if __name__ == '__main__':
     loader_kargs = {'num_workers': args.num_workers, 'pin_memory': True} if torch.cuda.is_available() else {'num_workers': args.num_workers}
 
     # mnist
-    args.name_data = 'mnist'
-    args.l_0 = 2
-    args.model = 'cnn'
-    args.layers = 4
+    # args.name_data = 'mnist'
+    # args.l_0 = 2
+    # args.model = 'cnn'
+    # args.layers = 4
     args.perc_prior = 0.3
 
     train, test = loaddataset(args.name_data)
