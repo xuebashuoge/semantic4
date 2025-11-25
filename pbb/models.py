@@ -1771,8 +1771,8 @@ def trainPNNet2(net, optimizer, epoch, train_loader, device, clamping, pmin, ver
     return loss_sum/len(train_loader), 1-(correct/(len(train_loader)*train_loader.batch_size)), kl_sum/len(train_loader)
 
 
-def trainPNNet(net, optimizer, pbobj, epoch, train_loader, lambda_var=None, optimizer_lambda=None, verbose=False):
-    """Train function for a probabilistic NN (including CNN)
+def trainPNNet(net, optimizer, pbobj, epoch, train_loader, device, clamping, pmin, verbose=False):
+    """Train function for a probabilistic NN (including CNN) optimising the bound
 
     Parameters
     ----------
@@ -1808,15 +1808,24 @@ def trainPNNet(net, optimizer, pbobj, epoch, train_loader, lambda_var=None, opti
     # variables that keep information about the results of optimising the bound
     avgerr, avgbound, avgkl, avgloss = 0.0, 0.0, 0.0, 0.0
 
-    if pbobj.objective == 'flamb':
-        lambda_var.train()
-        # variables that keep information about the results of optimising lambda (only for flamb)
-        avgerr_l, avgbound_l, avgkl_l, avgloss_l = 0.0, 0.0, 0.0, 0.0
-
+    # when is bounded?
     if pbobj.objective == 'bbb':
         clamping = False
     else:
         clamping = True
+
+    for data, target in tqdm(train_loader):
+        data, target = data.to(device), target.to(device)
+        net.zero_grad()
+        bound, kl, _, loss, err = pbobj.train_obj(
+            net, data, target, clamping=clamping)
+
+        bound.backward()
+        optimizer.step()
+        avgbound += bound.item()
+        avgkl += kl
+        avgloss += loss.item()
+        avgerr += err
 
     for batch_id, (data, target) in enumerate(tqdm(train_loader)):
         data, target = data.to(pbobj.device), target.to(pbobj.device)

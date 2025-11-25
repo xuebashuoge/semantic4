@@ -39,8 +39,8 @@ def train_and_certificate(args, train_loader, prior_loader, test_loader, empiric
     print('Learning prior...')
 
     net0 = select_prior_network(args.model, args.layers, args.name_data, args.dropout_prob, device=device)
-    
-    prior_folder = f'results/prior/{args.name}_{args.name_data}_{args.model}-{args.layers}_sig{args.sigma_prior}_pmin{args.pmin}_{args.prior_dist}_epochpri{args.prior_epochs}_bs{args.batch_size}_lrpri{args.learning_rate_prior}_mompri{args.momentum_prior}_drop{args.dropout_prob}_perc{args.perc_prior}/'
+
+    prior_folder = f'results/prior/{args.name}_{args.name_data}_{args.model}-{args.layers}_{args.prior_dist}_sig{args.sigma_prior}_prior-{args.init_prior}{f'_epochpri{args.prior_epochs}_bs{args.batch_size}_lrpri{args.learning_rate_prior}_mompri{args.momentum_prior}_drop{args.dropout_prob}_perc{args.perc_prior}' if args.init_prior.lower() == 'learnt' else ''}/'
 
     train_prior(net0, prior_loader, test_loader, prior_folder, args, device)
 
@@ -49,11 +49,11 @@ def train_and_certificate(args, train_loader, prior_loader, test_loader, empiric
 
     net = select_network(args.model, args.layers, args.name_data, args.sigma_prior, args.prior_dist, l_0=args.l_0, channel_type=args.channel_type, outage=args.outage, init_net=net0, device=device)
 
-    posterior_folder = f'results/{args.name}_{args.name_data}_{args.model}-{args.layers}_sig{args.sigma_prior}_pmin{args.pmin}_{args.prior_dist}_epoch{args.epochs}_bs{args.batch_size}_lr{args.learning_rate}_mom{args.momentum}_drop{args.dropout_prob}/'
+    posterior_folder = f'results/{args.name}_{args.name_data}_{args.model}-{args.layers}_{'bounded' if args.clamping else 'unbounded'}-loss_pmin{args.pmin}_epoch{args.epochs}_bs{args.batch_size}_lr{args.learning_rate}_mom{args.momentum}_drop{args.dropout_prob}_{args.prior_dist}_sig{args.sigma_prior}_prior-{args.init_prior}{f'_epochpri{args.prior_epochs}_bs{args.batch_size}_lrpri{args.learning_rate_prior}_mompri{args.momentum_prior}_drop{args.dropout_prob}_perc{args.perc_prior}' if args.init_prior.lower() == 'learnt' else ''}/'
     kl = train_posterior(net, train_loader, posterior_folder, args, device)
 
     print('Computing certificate...')
-    certificate_folder = f'results/{args.name}_{args.name_data}_{args.model}-{args.layers}_sig{args.sigma_prior}_pmin{args.pmin}_{args.prior_dist}_epoch{args.epochs}_bs{args.batch_size}_lr{args.learning_rate}_mom{args.momentum}_drop{args.dropout_prob}/certificate/'
+    certificate_folder = f'{posterior_folder}/certificate/'
 
     # compute empirical and population risks
     compute_certificate(net, empirical_loader, population_loader, lip_loader, certificate_folder, kl, args, device)
@@ -112,29 +112,32 @@ def train_prior(net0, train_loader, test_loader, folder, args, device='cuda'):
         print(f"train loss last epoch {prior_loss_tr[-1]:.4f}, train err last epoch {prior_err_tr[-1]:.4f}, test loss {loss_net0:.4f}, test err {error_net0:.4f}")
     
     else:
-        optimizer = optim.SGD(net0.parameters(), lr=args.learning_rate_prior, momentum=args.momentum_prior)
-
         prior_loss_tr = torch.zeros(args.prior_epochs)
         prior_err_tr = torch.zeros(args.prior_epochs)
-        for epoch in range(args.prior_epochs):
-            train_loss, train_err = trainNNet(net0, optimizer, epoch, train_loader, device=device, verbose=True)
+        if args.init_prior.lower() == 'random':
+            loss_net0, error_net0 = testNNet(net0, test_loader, device=device)
+        elif args.init_prior.lower() == 'learnt':
+            optimizer = optim.SGD(net0.parameters(), lr=args.learning_rate_prior, momentum=args.momentum_prior)
 
-            prior_loss_tr[epoch] = train_loss
-            prior_err_tr[epoch] = train_err
-        
-        loss_net0, error_net0 = testNNet(net0, test_loader, device=device)
+            for epoch in range(args.prior_epochs):
+                train_loss, train_err = trainNNet(net0, optimizer, epoch, train_loader, device=device, verbose=True)
 
-        plt.figure()
-        plt.plot(range(1,args.prior_epochs+1), prior_loss_tr)
-        plt.xlabel('Epochs')
-        plt.ylabel('Prior NLL loss')
-        plt.savefig(f'{folder}/prior_loss.pdf', dpi=300, bbox_inches='tight')
+                prior_loss_tr[epoch] = train_loss
+                prior_err_tr[epoch] = train_err
+            
+            loss_net0, error_net0 = testNNet(net0, test_loader, device=device)
 
-        plt.figure()
-        plt.plot(range(1,args.prior_epochs+1), prior_err_tr)
-        plt.xlabel('Epochs')
-        plt.ylabel('Prior 0-1 error')
-        plt.savefig(f'{folder}/prior_err.pdf', dpi=300, bbox_inches='tight')
+            plt.figure()
+            plt.plot(range(1,args.prior_epochs+1), prior_loss_tr)
+            plt.xlabel('Epochs')
+            plt.ylabel('Prior NLL loss')
+            plt.savefig(f'{folder}/prior_loss.pdf', dpi=300, bbox_inches='tight')
+
+            plt.figure()
+            plt.plot(range(1,args.prior_epochs+1), prior_err_tr)
+            plt.xlabel('Epochs')
+            plt.ylabel('Prior 0-1 error')
+            plt.savefig(f'{folder}/prior_err.pdf', dpi=300, bbox_inches='tight')
 
         torch.save(net0.state_dict(), prior_file)
 
@@ -224,7 +227,7 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
         channel_specs = f'outage{args.outage}'
     else:
         channel_specs = 'nochannel'
-    certificate_file = f"{folder}/{args.certificate_type.lower()}_{args.channel_type.lower()}_{channel_specs}_chan-layer{args.l_0}_mcsamples{args.mc_samples}_{args.init_prior}-prior_{args.channel_type.lower()}_{channel_specs}_{'bounded' if args.clamping else 'unbounded'}_results.pth"
+    certificate_file = f"{folder}/{args.channel_type.lower()}_{channel_specs}_chan-layer{args.l_0}_mcsamples{args.mc_samples}_{args.channel_type.lower()}_{channel_specs}_{'bounded' if args.clamping else 'unbounded'}_results.pth"
 
     if args.channel_type.lower() == 'rayleigh':
         channel_specs_prime = f'noise{args.noise_var_prime}'
@@ -232,8 +235,11 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
         channel_specs_prime = f'outage{args.outage_prime}'
     else:
         channel_specs_prime = 'nochannel'
+
     # load lipschitz constant
     lip_file = f'results/lip_constant_{args.lip_name}_{args.name_data}_{args.model}-{args.layers}_{args.init_prior}-prior_{args.channel_type.lower()}_{channel_specs_prime}_chan-layer{args.l_0}_{'bounded' if args.clamping else 'unbounded'}-loss.json'
+
+    bound_file = f"{folder}/bound_{args.bound_type.lower()}_{args.channel_type.lower()}_{channel_specs}_chan-layer{args.l_0}_mcsamples{args.mc_samples}_prior-channel-{channel_specs_prime}_results.json"
     
     with open(lip_file, 'r') as f:
         lip_data = json.load(f)
@@ -274,8 +280,6 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
             results_dict['cross_entropy_population'] = cross_entropy_population
             save_new = True 
 
-        results_dict['L_w'] = L_w
-        save_new = True 
     else:
         print(f"Computing new certificate...")
         net.eval()
@@ -293,7 +297,6 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
             'error_population': error_population,
             'cross_entropy_population': cross_entropy_population,
             'kl': kl,
-            'L_w': L_w,
             'dimension': net.dimension,
         }
         save_new = True
@@ -313,10 +316,11 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
             _ = net(data_batch, sample=False, wireless=True)
         results_dict['dimension'] = dimension = net.dimension
         save_new = True
-    
-    
 
-    
+    if save_new:
+        torch.save(results_dict, certificate_file)
+        print(f"Saved updated certificate to {certificate_file}")
+
     # bound evaluation
     # sigma-sub-Gaussian is equivalent to bounded in [0, 2*sigma], the loss function here is clamped in [0, log(1/pmin)]
     sigma = math.log(1/args.pmin)/2
@@ -328,7 +332,7 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
     def calculate_torch(d: int, p_0: float, device='cuda'):
         if device != 'cuda':
             device = 'cpu'
-            
+
         if d <= 0: return 0.0
         
         # Move to device immediately
@@ -353,20 +357,33 @@ def compute_certificate(net, empirical_loader, population_loader, lip_loader, fo
 
     if args.channel_type.lower() == 'bec':
         if args.norm_type.lower() == 'frob':
-            if args.certificate_type.lower() == 'general':
+            if args.bound_type.lower() == 'general':
                 pass
-            elif args.certificate_type.lower() == 'corollary':
+            elif args.bound_type.lower() == 'corollary':
                 channel_term = L_w * calculate_torch(dimension, args.outage, device=device) 
 
     bound += channel_term 
     bound_ce = cross_entropy_empirical + bound
     bound_01 = error_empirical + bound
-    results_dict['bound'] = bound
-    results_dict['bound_ce'] = bound_ce
-    results_dict['bound_01'] = bound_01
 
-    if save_new:
-        torch.save(results_dict, certificate_file)
+    bound_dict = {
+            'args': args,
+            'error_empirical': error_empirical,
+            'cross_entropy_empirical': cross_entropy_empirical,
+            'error_population': error_population,
+            'cross_entropy_population': cross_entropy_population,
+            'kl': kl,
+            'dimension': results_dict['dimension'],
+            'L_w': L_w,
+            'bound': bound,
+            'bound_ce': bound_ce,
+            'bound_01': bound_01
+        }
+    
+    torch.save(bound_dict, bound_file)
+    print(f"Saved bound results to {bound_file}")
+
+    
 
     print(f"***Final results***")
     print(f"Dataset: {args.name_data}, Sigma: {args.sigma_prior :.5f}, pmin: {args.pmin :.5f}, Dropout: {args.dropout_prob :.5f}, Perc_train: {args.perc_train :.5f}, Perc_prior: {args.perc_prior :.5f}, L_0: {args.l_0}, Channel: {args.channel_type}, Outage: {args.outage :.5f}, MC samples: {args.mc_samples}, Clamping: {args.clamping}, KL: {kl :.5f}, L_w: {L_w :.5f}, d: {dimension}")

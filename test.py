@@ -45,32 +45,56 @@ if __name__ == '__main__':
 
     loader_kargs = {'num_workers': args.num_workers, 'pin_memory': True} if torch.cuda.is_available() else {'num_workers': args.num_workers}
 
-    train, test = loaddataset(args.name_data)
-
-    train_loader, test_loader, valid_loader, _, _, bound_loader, lip_all_loader, lip_test_loader = loadbatches(train, test, loader_kargs, args.batch_size, args.lip_bs, prior=True, perc_train=args.perc_train, perc_prior=args.perc_prior)
-
-    # args.l_0 = 2
-
-    # train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
-
-
-    # args.model = 'fcn'
-    # args.l_0 = 2
-
-    # train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
-
-    # cifar10
+    # mnist
     args.name_data = 'mnist'
     args.l_0 = 2
     args.model = 'cnn'
     args.layers = 4
+    args.perc_prior = 0.3
 
     train, test = loaddataset(args.name_data)
 
-    train_loader, test_loader, valid_loader, _, _, bound_loader, lip_all_loader, lip_test_loader = loadbatches(train, test, loader_kargs, args.batch_size, args.lip_bs, prior=True, perc_train=args.perc_train, perc_prior=args.perc_prior)
+    all_train_loader, test_loader, prior_loader, _, _, train_loader, lip_all_loader, lip_test_loader = loadbatches(train, test, loader_kargs, args.batch_size, args.lip_bs, prior=(args.init_prior == 'learnt'), perc_train=args.perc_train, perc_prior=args.perc_prior)
 
+    args.prior_epochs = 5
+    args.epochs = 30
 
-    train_and_certificate(args, train_loader=train_loader, prior_loader=valid_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+    train_and_certificate(args, train_loader=train_loader, prior_loader=prior_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+    
+    args.prior_epochs = 10
+    args.epochs = 30
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=prior_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    args.prior_epochs = 20
+    args.epochs = 30
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=prior_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    args.prior_epochs = 30
+    args.epochs = 30
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=prior_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    args.prior_epochs = 5
+    args.epochs = 50
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=prior_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+    
+    args.prior_epochs = 10
+    args.epochs = 50
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=prior_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    args.prior_epochs = 20
+    args.epochs = 50
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=prior_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
+
+    args.prior_epochs = 30
+    args.epochs = 50
+
+    train_and_certificate(args, train_loader=train_loader, prior_loader=prior_loader, test_loader=test_loader, empirical_loader=train_loader, population_loader=test_loader, lip_loader=lip_all_loader, device=device)
 
 
     print('All tests done!')

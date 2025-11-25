@@ -51,7 +51,7 @@ if __name__ == '__main__':
 
     train, test = loaddataset(args.name_data)
 
-    train_loader, test_loader, valid_loader, _, _, bound_loader, lip_all_loader, lip_test_loader = loadbatches(train, test, loader_kargs, args.batch_size, args.lip_bs, prior=True, perc_train=args.perc_train, perc_prior=args.perc_prior)
+    all_train_loader, test_loader, prior_loader, _, _, train_loader, lip_all_loader, lip_test_loader = loadbatches(train, test, loader_kargs, args.batch_size, args.lip_bs, prior=True, perc_train=args.perc_train, perc_prior=args.perc_prior)
 
 
     os.makedirs('results', exist_ok=True)
@@ -73,6 +73,7 @@ if __name__ == '__main__':
         except Exception as e:
             raise RuntimeError(f'Error loading prior network from {prior_file}: {e}')
     else:
+        # set net0 to None, then the probability NN will set prior according to truncated Gaussian
         net0 = None
 
     # compute Lipschitz constant

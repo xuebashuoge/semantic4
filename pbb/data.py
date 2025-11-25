@@ -85,31 +85,28 @@ def loadbatches(train, test, loader_kargs, batch_size, lip_bs=100, prior=False, 
             train, batch_size=len(train_idx), sampler=train_sampler, **loader_kargs)
         test_1batch = DataLoader(
             test, batch_size=ntest, shuffle=True, **loader_kargs)
-        train_loader = DataLoader(
+        all_train_loader = DataLoader(
             train, batch_size=batch_size, sampler=train_sampler, **loader_kargs)
         test_loader = DataLoader(
             test, batch_size=batch_size, shuffle=True, **loader_kargs)
         prior_loader = None
-        set_val_bound = train_loader
+        train_loader = all_train_loader
 
     else:
         # reduce training data if needed
         new_num_train = int(np.round((perc_train)*ntrain))
         indices = list(range(new_num_train))
         split = int(np.round((perc_prior)*new_num_train))
-        random_seed = 10
-        np.random.seed(random_seed)
-        np.random.shuffle(indices)
 
         all_train_sampler = SubsetRandomSampler(indices)
         train_idx, valid_idx = indices[split:], indices[:split]
         train_sampler = SubsetRandomSampler(train_idx)
         valid_sampler = SubsetRandomSampler(valid_idx)
 
-        set_bound_1batch = DataLoader(train, batch_size=len(train_idx), sampler=train_sampler, **loader_kargs)
-        set_val_bound = DataLoader(train, batch_size=batch_size, sampler=train_sampler, shuffle=False)
+        train_loader = DataLoader(train, batch_size=batch_size, sampler=train_sampler, shuffle=False)
+        train_1batch = DataLoader(train, batch_size=len(train_idx), sampler=train_sampler, **loader_kargs)
         test_1batch = DataLoader(test, batch_size=ntest, shuffle=True, **loader_kargs)
-        train_loader = DataLoader(train, batch_size=batch_size, sampler=all_train_sampler, shuffle=False)
+        all_train_loader = DataLoader(train, batch_size=batch_size, sampler=all_train_sampler, shuffle=False)
         prior_loader = DataLoader(train, batch_size=batch_size, sampler=valid_sampler, shuffle=False)
         test_loader = DataLoader(test, batch_size=batch_size, shuffle=True, **loader_kargs)
 
@@ -118,8 +115,8 @@ def loadbatches(train, test, loader_kargs, batch_size, lip_bs=100, prior=False, 
         lip_all_loader = DataLoader(all_dataset, batch_size=lip_bs, shuffle=True, **loader_kargs)
         lip_test_loader = DataLoader(test, batch_size=lip_bs, shuffle=True, **loader_kargs)
 
-    # train_loader comprises all the data used in training and prior_loader the data used to build the prior
-    # set_bound_1batch and set_bound are the set of data points used to evaluate the bound.
+    # all_train_loader comprises all the data used in training and prior_loader the data used to build the prior
+    # train_1batch and set_bound are the set of data points used to evaluate the bound.
     # the only difference between these two is that one of them is splitted in multiple batches while the 1batch one is only one batch. This is for computational efficiency with some of the large architectures used.
     # The same is done for test_1batch
-    return train_loader, test_loader, prior_loader, set_bound_1batch, test_1batch, set_val_bound, lip_all_loader, lip_test_loader
+    return all_train_loader, test_loader, prior_loader, train_1batch, test_1batch, train_loader, lip_all_loader, lip_test_loader
