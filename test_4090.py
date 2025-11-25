@@ -9,12 +9,19 @@ Test script
 @Contact :   sugarhe58@gmail.com
 '''
 
+import os
 import json
 import torch
 import argparse
 import numpy as np
 from pbb.utils import test_exp, train_and_certificate, my_exp, set_device, set_seed
 from pbb.data import loaddataset, loadbatches
+
+# Set the environment variable
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+
+# Now enable deterministic algorithms
+torch.use_deterministic_algorithms(True)
 
 if __name__ == '__main__':
 
@@ -40,7 +47,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    device = set_device()
+    device = set_device(args)
     set_seed(args.seed, device)
 
     loader_kargs = {'num_workers': args.num_workers, 'pin_memory': True} if torch.cuda.is_available() else {'num_workers': args.num_workers}
