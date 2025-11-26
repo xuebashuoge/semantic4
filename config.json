@@ -1,5 +1,5 @@
 {
-    "name": "train&empirical-has-no-prior-data",
+    "name": "train&empirical-has-prior-data",
     "name_data": "mnist",
     "model": "cnn",
     "layers": 4,
